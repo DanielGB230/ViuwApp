@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -291,6 +292,38 @@ fun SenderStandbyScreen(
                     }
                 )
             }
+
+            // Chip de autostart para Xiaomi (MIUI/HyperOS)
+            if (Build.MANUFACTURER.lowercase().contains("xiaomi") ||
+                Build.MANUFACTURER.lowercase().contains("redmi") ||
+                Build.MANUFACTURER.lowercase().contains("poco")) {
+                Spacer(Modifier.height(20.dp))
+                XiaomiAutostartChip(
+                    onClick = {
+                        val intent = Intent().apply {
+                            component = android.content.ComponentName(
+                                "com.miui.securitycenter",
+                                "com.miui.permcenter.autostart.AutoStartManagementActivity"
+                            )
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            // Fallback: ajustes de la app
+                            val fallback = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = android.net.Uri.parse("package:${context.packageName}")
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            try {
+                                context.startActivity(fallback)
+                            } catch (e2: Exception) {
+                                Log.w(TAG, "No se pudo abrir autostart Xiaomi: ${e2.message}")
+                            }
+                        }
+                    }
+                )
+            }
         }
     }
 }
@@ -396,6 +429,25 @@ private fun BatteryOptimizationChip(onClick: () -> Unit) {
         Spacer(Modifier.width(8.dp))
         Text(
             text = "Desactivar optimización de batería",
+            fontSize = 12.sp
+        )
+    }
+}
+
+@Composable
+private fun XiaomiAutostartChip(onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        shape = RoundedCornerShape(50)
+    ) {
+        Icon(
+            imageVector = Icons.Default.AutoFixHigh,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = "Activar inicio automático (Xiaomi)",
             fontSize = 12.sp
         )
     }

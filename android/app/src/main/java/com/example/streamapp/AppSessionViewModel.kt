@@ -3,6 +3,7 @@ package com.example.streamapp
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.provider.Settings
 import android.util.Log
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.NoCredentialException
@@ -173,7 +174,13 @@ class AppSessionViewModel(
         _devicesError.value = null
         viewModelScope.launch {
             val devices = authRepository.fetchMyDevices()
-            _devicesList.value = devices
+            // Filtra el dispositivo cuyo hardwareId coincida con el del propio Receptor
+            val currentHardwareId = Settings.Secure.getString(
+                getApplication<Application>().contentResolver,
+                Settings.Secure.ANDROID_ID
+            ) ?: ""
+            val filtered = devices.filter { it.deviceHardwareId != currentHardwareId }
+            _devicesList.value = filtered
             _isLoadingDevices.value = false
         }
     }

@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
@@ -71,6 +73,7 @@ class StreamingForegroundService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        registerNetworkCallback()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -173,6 +176,40 @@ class StreamingForegroundService : LifecycleService() {
 
         startAsForeground(standby = true)
         startStandbyPresence()
+    }
+
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            Log.d(TAG, "Red disponible -> reconectando SignalR y presencia")
+            serviceScope.launch {
+                try {
+                    val client = ensureSignalRReady()
+                    registerPresence(client)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "No se pudo reconectar tras red disponible: ${t.message}")
+                }
+            }
+        }
+    }
+
+    private fun registerNetworkCallback() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                val cm = getSystemService(ConnectivityManager::class.java)
+                cm?.registerDefaultNetworkCallback(networkCallback)
+            } catch (t: Throwable) {
+                Log.w(TAG, "No se pudo registrar NetworkCallback: ${t.message}")
+            }
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                val cm = getSystemService(ConnectivityManager::class.java)
+                cm?.unregisterNetworkCallback(networkCallback)
+            } catch (_: Throwable) {}
+        }
     }
 
     /**
@@ -492,6 +529,7 @@ class StreamingForegroundService : LifecycleService() {
         cleanupStreaming()
         stopForegroundNow()
         serviceScope.cancel()
+        unregisterNetworkCallback()
         super.onDestroy()
     }
 }

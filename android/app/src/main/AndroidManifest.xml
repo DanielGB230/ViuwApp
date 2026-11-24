@@ -33,14 +33,17 @@
                 android:value="parental_control_presence" />
         </service>
 
-        <!-- BootReceiver: reactiva la presencia SENDER al reiniciar el dispositivo -->
+        <!-- BootReceiver: reactiva la presencia SENDER al reiniciar/actualizar la app -->
         <receiver
             android:name="com.example.streamapp.service.BootReceiver"
+            android:directBootAware="true"
             android:enabled="true"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.USER_PRESENT" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

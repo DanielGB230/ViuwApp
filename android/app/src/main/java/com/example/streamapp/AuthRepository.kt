@@ -40,7 +40,8 @@ data class DeviceListItem(
     val id: String,
     val deviceName: String,
     val isOnline: Boolean,
-    val lastSeen: String? = null
+    val lastSeen: String? = null,
+    val deviceHardwareId: String? = null
 )
 
 /**
@@ -215,7 +216,8 @@ class AuthRepository(
                             deviceName = obj.optString("deviceName", "Dispositivo"),
                             isOnline = obj.optBoolean("isOnline", false),
                             lastSeen = if (obj.has("lastSeenUtc")) obj.optString("lastSeenUtc")
-                            else if (obj.has("lastSeen")) obj.optString("lastSeen") else null
+                            else if (obj.has("lastSeen")) obj.optString("lastSeen") else null,
+                            deviceHardwareId = obj.optString("deviceHardwareId", "").takeIf { it.isNotBlank() }
                         )
                     )
                 }

@@ -77,4 +77,7 @@ dependencies {
 
     // OkHttp (cliente HTTP moderno, sin dependencias redundantes)
     implementation(libs.okhttp)
+
+    // WorkManager: presencia/reconexión automática al recuperar Internet
+    implementation(libs.androidx.work.runtime.ktx)
 }

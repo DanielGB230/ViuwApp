@@ -20,8 +20,10 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.VideocamOff
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -242,7 +244,13 @@ fun ReceiverScreen(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(if (isLive) Color(0xFF10B981) else Color(0xFF94A3B8))
+                                .background(
+                                    when {
+                                        isLive -> Color(0xFF10B981)
+                                        state.isWaitingForEmitter -> Color(0xFFF59E0B)
+                                        else -> Color(0xFF94A3B8)
+                                    }
+                                )
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
@@ -257,14 +265,62 @@ fun ReceiverScreen(
                     // montado debajo, así al activar la cámara el vídeo aparece
                     // sin recrear la vista ni producir pantalla negra.
                     if (!isLive) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.92f)),
-                            contentAlignment = Alignment.Center
-                        ) {
+                        if (state.isWaitingForEmitter) {
                             Column(
-                                modifier = Modifier.padding(24.dp),
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.92f))
+                                    .padding(24.dp),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(40.dp),
+                                    color = Color(0xFF10B981),
+                                    strokeWidth = 3.dp
+                                )
+                                Spacer(Modifier.height(16.dp))
+                                Text(
+                                    text = state.status,
+                                    color = Color(0xFFCBD5E1),
+                                    fontSize = 14.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        } else if (state.emitterTimeout) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.92f))
+                                    .padding(24.dp),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.WifiOff,
+                                    contentDescription = null,
+                                    tint = Color(0xFFEF4444),
+                                    modifier = Modifier.size(48.dp)
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    text = state.status,
+                                    color = Color(0xFFCBD5E1),
+                                    fontSize = 14.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(Modifier.height(16.dp))
+                                Button(onClick = { viewModel.joinSession(state.sessionCode) }) {
+                                    Icon(Icons.Default.Refresh, contentDescription = null)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Reintentar")
+                                }
+                            }
+                        } else {
+                            Column(
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .padding(24.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Icon(

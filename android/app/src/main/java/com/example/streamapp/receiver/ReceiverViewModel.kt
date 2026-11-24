@@ -6,6 +6,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.streamapp.network.SignalRClient
 import com.example.streamapp.webrtc.WebRtcClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,7 +28,10 @@ data class ReceiverUiState(
     val isConnected: Boolean = false,
     val cameraMode: String = "OFF",
     val isMicEnabled: Boolean = false,
-    val error: String? = null
+    val error: String? = null,
+    // Fase 17: estados de espera/reintento
+    val isWaitingForEmitter: Boolean = false,
+    val emitterTimeout: Boolean = false
 )
 
 class ReceiverViewModel(application: Application) : AndroidViewModel(application) {
@@ -52,6 +58,9 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         ) ?: "android-device"
     }
 
+    // Timeout para detectar emisor sin conexión (25s)
+    private var timeoutJob: Job? = null
+
     fun joinSession(code: String) {
         if (_uiState.value.isConnecting || _uiState.value.isConnected) return
 
@@ -62,7 +71,9 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                 isConnecting = true,
                 cameraMode = "OFF",
                 isMicEnabled = false,
-                error = null
+                error = null,
+                isWaitingForEmitter = false,
+                emitterTimeout = false
             )
         }
 
@@ -92,9 +103,14 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                     sessionCode = code,
                     isConnecting = false,
                     isConnected = true,
-                    status = "Esperando al emisor..."
+                    // El emisor aún no ha respondido a la oferta SDP.
+                    status = "Despertando dispositivo supervisado...",
+                    isWaitingForEmitter = true,
+                    emitterTimeout = false
                 )
             }
+            // Inicia el timeout de 25s.
+            startEmitterTimeout()
         }
 
         signalR.onOfferReceived { offerSdp -> handleOffer(offerSdp) }
@@ -104,11 +120,13 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         }
 
         signalR.onSessionEnded { message ->
+            cancelEmitterTimeout()
             _uiState.update { it.copy(status = message, isConnected = false) }
             cleanup()
         }
 
         signalR.onSessionError { message ->
+            cancelEmitterTimeout()
             _uiState.update {
                 it.copy(
                     status = "Error",
@@ -120,7 +138,35 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /** Arranca cuenta atrás: si en 25s no llega la oferta, el emisor está offline. */
+    private fun startEmitterTimeout() {
+        cancelEmitterTimeout()
+        timeoutJob = viewModelScope.launch {
+            try {
+                delay(25_000)
+                _uiState.update {
+                    if (it.isWaitingForEmitter) {
+                        it.copy(
+                            status = "El dispositivo está sin conexión a Internet en este momento",
+                            isWaitingForEmitter = false,
+                            emitterTimeout = true
+                        )
+                    } else {
+                        it
+                    }
+                }
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private fun cancelEmitterTimeout() {
+        timeoutJob?.cancel()
+        timeoutJob = null
+    }
+
     private fun handleOffer(offerSdp: String) {
+        // Al recibir la oferta, el emisor está online y responde.
+        cancelEmitterTimeout()
         try {
             val client = webRtc ?: WebRtcClient(
                 context = getApplication(),
@@ -166,12 +212,13 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                 } catch (_: Throwable) {}
                 track.addSink(renderer)
             }
-            _uiState.update { it.copy(status = "Recibiendo transmisión") }
+            _uiState.update { it.copy(status = "Recibiendo transmisión", isWaitingForEmitter = false) }
         }
 
         override fun onConnectionState(state: String) {
             if (state == "CONNECTED") {
-                _uiState.update { it.copy(status = "Recibiendo transmisión en vivo") }
+                cancelEmitterTimeout()
+                _uiState.update { it.copy(status = "Recibiendo transmisión en vivo", isWaitingForEmitter = false) }
             }
         }
 
@@ -181,6 +228,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun leaveSession() {
+        cancelEmitterTimeout()
         cleanup()
     }
 
@@ -214,6 +262,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
      * WebRtcClient local y avisa para navegar a ReceiverDevices.
      */
     fun disconnect(onDisconnected: () -> Unit = {}) {
+        cancelEmitterTimeout()
         val code = sessionCode
         viewModelScope.launch {
             try {
@@ -288,6 +337,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
     }
 
     override fun onCleared() {
+        cancelEmitterTimeout()
         cleanup()
         signalR.closeConnection()
         releaseRendererEgl()
