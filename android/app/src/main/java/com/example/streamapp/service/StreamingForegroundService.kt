@@ -66,6 +66,7 @@ class StreamingForegroundService : LifecycleService() {
     private var offerSent = false
     private var presenceStarted = false
     private var standbyMode = false
+    private var handlersRegistered = false
 
     override fun onCreate() {
         super.onCreate()
@@ -83,10 +84,8 @@ class StreamingForegroundService : LifecycleService() {
             }
 
             ACTION_STANDBY -> {
-                Log.d(TAG, "ACTION_STANDBY recibida (solo presencia)")
-                standbyMode = true
-                startAsForeground(standby = true)
-                startStandbyPresence()
+                Log.d(TAG, "ACTION_STANDBY recibida (solo presencia, sin hardware)")
+                enterStandbyMode()
             }
 
             ACTION_START -> {
@@ -134,7 +133,9 @@ class StreamingForegroundService : LifecycleService() {
                         listener = senderListener
                     )
                     webRtc = client
-                    client.startLocalMedia(preferFrontCamera = true)
+                    // Fase 14: arranque con cámara trasera y micrófono activo.
+                    client.startLocalMedia(preferFrontCamera = false)
+                    client.setAudioEnabled(true)
                 }
 
                 val client = signalR ?: SignalRClient().also { signalR = it }
@@ -150,47 +151,80 @@ class StreamingForegroundService : LifecycleService() {
     }
 
     /**
+     * Entra en standby: garantiza que NO quede WebRtcClient, cámara ni micrófono
+     * activos, mantiene SignalR conectado y la presencia del dispositivo.
+     */
+    private fun enterStandbyMode() {
+        standbyMode = true
+
+        if (webRtc != null) {
+            try {
+                webRtc?.close()
+            } catch (t: Throwable) {
+                Log.w(TAG, "Error cerrando WebRTC al entrar en standby: ${t.message}")
+            }
+            webRtc = null
+        }
+
+        sessionCode = ""
+        pendingSessionCode = ""
+        streamingStarted = false
+        offerSent = false
+
+        startAsForeground(standby = true)
+        startStandbyPresence()
+    }
+
+    /**
      * Modo standby (arranque tras reinicio): conecta SignalR y registra la
-     * presencia del dispositivo, sin abrir cámara ni micrófono. Cuando el
-     * Receptor solicita el stream se arranca el streaming real.
+     * presencia del dispositivo, sin abrir cámara ni micrófono.
      */
     private fun startStandbyPresence() {
         if (presenceStarted) {
-            Log.d(TAG, "Presencia ya iniciada; se ignora ACTION_STANDBY duplicada")
+            Log.d(TAG, "Presencia ya iniciada; se ignora solicitud duplicada")
             return
         }
         presenceStarted = true
 
         serviceScope.launch {
             try {
-                val client = signalR ?: SignalRClient().also { signalR = it }
-                client.connect()
-                registerSignalRHandlers(client)
-
-                client.onStartStream { sessionId ->
-                    Log.d(TAG, "StartStream recibido en standby: sessionId=$sessionId")
-                    startStreaming(sessionId)
-                }
-
-                val hardwareId = Settings.Secure.getString(
-                    contentResolver,
-                    Settings.Secure.ANDROID_ID
-                ).orEmpty()
-
-                if (hardwareId.isNotBlank()) {
-                    client.registerDevicePresence(hardwareId)
-                    Log.d(TAG, "Presencia standby registrada para $hardwareId")
-                } else {
-                    Log.w(TAG, "ANDROID_ID vacío; no se pudo registrar presencia")
-                }
+                val client = ensureSignalRReady()
+                registerPresence(client)
             } catch (t: Throwable) {
                 Log.e(TAG, "No se pudo iniciar la presencia en standby", t)
+                presenceStarted = false
                 stopStreamingAndSelf()
             }
         }
     }
 
+    /** Conecta SignalR (si hace falta) y registra los handlers una sola vez. */
+    private suspend fun ensureSignalRReady(): SignalRClient {
+        val client = signalR ?: SignalRClient().also { signalR = it }
+        client.connect()
+        registerSignalRHandlers(client)
+        return client
+    }
+
+    /** Actualiza la presencia del dispositivo en el backend. */
+    private fun registerPresence(client: SignalRClient) {
+        val hardwareId = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ANDROID_ID
+        ).orEmpty()
+
+        if (hardwareId.isNotBlank()) {
+            client.registerDevicePresence(hardwareId)
+            Log.d(TAG, "Presencia registrada para $hardwareId")
+        } else {
+            Log.w(TAG, "ANDROID_ID vacío; no se pudo registrar presencia")
+        }
+    }
+
     private fun registerSignalRHandlers(client: SignalRClient) {
+        if (handlersRegistered) return
+        handlersRegistered = true
+
         client.onSessionCreated { code ->
             sessionCode = code
             Log.d(TAG, "SessionCreated: $code (esperando OnPeerJoined para ofertar)")
@@ -232,6 +266,12 @@ class StreamingForegroundService : LifecycleService() {
             Log.e(TAG, "SessionError: $message")
         }
 
+        // ---- Arranque de streaming (desde standby o FCM) ----
+        client.onStartStream { sessionId ->
+            Log.d(TAG, "StartStream recibido: sessionId=$sessionId")
+            startStreaming(sessionId)
+        }
+
         // ---- Controles remotos desde el Receptor ----
         client.onSwitchCameraRequested {
             Log.d(TAG, "OnSwitchCameraRequested -> switchCamera()")
@@ -241,6 +281,56 @@ class StreamingForegroundService : LifecycleService() {
         client.onToggleMuteRequested { isMuted ->
             Log.d(TAG, "OnToggleMuteRequested -> setAudioEnabled(${!isMuted})")
             webRtc?.setAudioEnabled(!isMuted)
+        }
+
+        // Fase 14: controles independientes de cámara y micrófono.
+        client.onCameraModeChanged { mode ->
+            Log.d(TAG, "OnCameraModeChanged -> setCameraMode($mode)")
+            webRtc?.setCameraMode(mode)
+        }
+
+        client.onMicrophoneEnabledChanged { enabled ->
+            Log.d(TAG, "OnMicrophoneEnabledChanged -> setAudioEnabled($enabled)")
+            webRtc?.setAudioEnabled(enabled)
+        }
+
+        // El Receptor pidió desconectar: liberar hardware y volver a standby
+        // sin cerrar SignalR ni la sesión.
+        client.onStreamStopped {
+            Log.d(TAG, "OnStreamStopped -> liberando WebRTC y volviendo a standby")
+            returnToStandby()
+        }
+    }
+
+    /**
+     * Libera cámara/micrófono/PeerConnection y regresa al modo standby,
+     * manteniendo SignalR y la presencia activos.
+     */
+    private fun returnToStandby() {
+        if (webRtc != null) {
+            try {
+                webRtc?.close()
+            } catch (t: Throwable) {
+                Log.w(TAG, "Error cerrando WebRTC al volver a standby: ${t.message}")
+            }
+            webRtc = null
+        }
+
+        sessionCode = ""
+        pendingSessionCode = ""
+        streamingStarted = false
+        offerSent = false
+        standbyMode = true
+
+        startAsForeground(standby = true)
+
+        serviceScope.launch {
+            try {
+                val client = ensureSignalRReady()
+                registerPresence(client)
+            } catch (t: Throwable) {
+                Log.e(TAG, "No se pudo mantener la presencia tras OnStreamStopped", t)
+            }
         }
     }
 

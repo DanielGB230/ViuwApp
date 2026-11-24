@@ -20,7 +20,9 @@ import org.json.JSONObject
  *   SendIceCandidate(sessionCode, candidate, sdpMid, sdpMLineIndex),
  *   EndSession(sessionCode, deviceId),
  *   RegisterDevicePresence(deviceId),
- *   RequestSwitchCamera(sessionCode), RequestToggleMute(sessionCode, isMuted)
+ *   RequestSwitchCamera(sessionCode), RequestToggleMute(sessionCode, isMuted),
+ *   SetCameraMode(sessionCode, mode), SetMicrophoneEnabled(sessionCode, enabled),
+ *   StopStream(sessionCode)
  *
  * Eventos recibidos (servidor -> cliente):
  *   SessionCreated(code), SessionJoined(code), ReceiverJoined(code),
@@ -29,7 +31,8 @@ import org.json.JSONObject
  *   IceCandidateReceived(candidate, sdpMid, sdpMLineIndex),
  *   SessionEnded(message), SessionError(message),
  *   StartStream(sessionId) | OnStartStreamRequested(sessionId),
- *   OnSwitchCameraRequested, OnToggleMuteRequested(isMuted)
+ *   OnSwitchCameraRequested, OnToggleMuteRequested(isMuted),
+ *   OnCameraModeChanged(mode), OnMicrophoneEnabledChanged(enabled), OnStreamStopped()
  */
 class SignalRClient(
     baseUrl: String = BuildConfig.SIGNALING_BASE_URL
@@ -145,6 +148,31 @@ class SignalRClient(
         }
     }
 
+    // ---- Controles independientes (Fase 14) ----
+
+    /** El Emisor cambió de modo de cámara: "BACK", "FRONT" u "OFF". */
+    fun onCameraModeChanged(handler: (String) -> Unit) = subscribe("OnCameraModeChanged", handler)
+
+    /** El Emisor activó/desactivó el micrófono. */
+    fun onMicrophoneEnabledChanged(handler: (Boolean) -> Unit) {
+        try {
+            connection?.on(
+                "OnMicrophoneEnabledChanged",
+                Action1<java.lang.Boolean> { value -> handler(value == java.lang.Boolean.TRUE) },
+                java.lang.Boolean::class.java
+            )
+        } catch (_: Throwable) {
+        }
+    }
+
+    /** El Receptor solicitó detener el stream; el Emisor vuelve a standby. */
+    fun onStreamStopped(handler: () -> Unit) {
+        try {
+            connection?.on("OnStreamStopped", Action { handler() })
+        } catch (_: Throwable) {
+        }
+    }
+
     // ---- Invocaciones al hub ----
     fun createSession(sessionCode: String = "") = send("CreateSession", sessionCode)
 
@@ -178,6 +206,30 @@ class SignalRClient(
     suspend fun requestToggleMute(sessionCode: String, isMuted: Boolean) = withContext(Dispatchers.IO) {
         try {
             connection?.invoke("RequestToggleMute", sessionCode, isMuted)?.blockingAwait()
+        } catch (_: Throwable) {
+        }
+    }
+
+    /** Cambia el modo de cámara del Emisor: "BACK", "FRONT" u "OFF". */
+    suspend fun setCameraMode(sessionCode: String, mode: String) = withContext(Dispatchers.IO) {
+        try {
+            connection?.invoke("SetCameraMode", sessionCode, mode)?.blockingAwait()
+        } catch (_: Throwable) {
+        }
+    }
+
+    /** Activa/desactiva el micrófono del Emisor. */
+    suspend fun setMicrophoneEnabled(sessionCode: String, enabled: Boolean) = withContext(Dispatchers.IO) {
+        try {
+            connection?.invoke("SetMicrophoneEnabled", sessionCode, enabled)?.blockingAwait()
+        } catch (_: Throwable) {
+        }
+    }
+
+    /** Pide al Emisor detener el streaming y volver a standby. */
+    suspend fun stopStream(sessionCode: String) = withContext(Dispatchers.IO) {
+        try {
+            connection?.invoke("StopStream", sessionCode)?.blockingAwait()
         } catch (_: Throwable) {
         }
     }

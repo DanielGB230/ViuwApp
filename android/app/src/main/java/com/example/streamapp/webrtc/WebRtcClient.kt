@@ -76,6 +76,9 @@ class WebRtcClient(
     private var localVideoTrack: VideoTrack? = null
     private var localAudioTrack: AudioTrack? = null
 
+    /** Último modo aplicado: "BACK", "FRONT" u "OFF". */
+    private var currentCameraMode: String = "OFF"
+
     private val pendingCandidates = mutableListOf<IceCandidate>()
     private var remoteDescriptionSet = false
 
@@ -154,15 +157,23 @@ class WebRtcClient(
         }
 
         localVideoTrack = factory.createVideoTrack("video0", source)
+        currentCameraMode = if (preferFrontCamera) "FRONT" else "BACK"
     }
 
     fun restartCamera(preferFrontCamera: Boolean = true) {
+        restartCameraInternal(preferFrontCamera)
+        currentCameraMode = if (preferFrontCamera) "FRONT" else "BACK"
+    }
+
+    private fun restartCameraInternal(preferFrontCamera: Boolean) {
         try {
             videoCapturer?.stopCapture()
         } catch (_: Throwable) {}
         try {
             videoCapturer?.dispose()
         } catch (_: Throwable) {}
+        videoCapturer = null
+
         val source = videoSource ?: return
         val helper = surfaceTextureHelper ?: return
         val capturer = createCameraCapturer(preferFrontCamera) ?: run {
@@ -171,7 +182,62 @@ class WebRtcClient(
         }
         videoCapturer = capturer
         capturer.initialize(helper, context, source.capturerObserver)
-        capturer.startCapture(1280, 720, 30)
+        try {
+            capturer.startCapture(1280, 720, 30)
+        } catch (t: Throwable) {
+            Log.w("WebRtcClient", "Fallo captura a 720p, intentando a 640x480: ${t.message}")
+            try {
+                capturer.startCapture(640, 480, 30)
+            } catch (t2: Throwable) {
+                listener.onError("No se pudo iniciar la cámara: ${t2.message}")
+            }
+        }
+    }
+
+    /**
+     * Cambia el modo de cámara local:
+     *  - "FRONT"/"BACK": asegura el capturador en el lente pedido y activa la pista.
+     *  - "OFF": detiene la captura y desactiva la pista (libera la cámara física)
+     *    sin cortar el audio ni la conexión.
+     */
+    fun setCameraMode(mode: String) {
+        if (!isSender) return
+
+        when (val normalized = mode.trim().uppercase()) {
+            "OFF" -> {
+                if (currentCameraMode != "OFF") {
+                    try {
+                        videoCapturer?.stopCapture()
+                    } catch (t: Throwable) {
+                        Log.w("WebRtcClient", "stopCapture falló: ${t.message}")
+                    }
+                }
+                currentCameraMode = "OFF"
+                try {
+                    localVideoTrack?.setEnabled(false)
+                } catch (_: Throwable) {}
+                Log.i("WebRtcClient", "Cámara apagada (solo audio)")
+            }
+
+            "FRONT", "BACK" -> {
+                val preferFront = normalized == "FRONT"
+                try {
+                    localVideoTrack?.setEnabled(true)
+                } catch (_: Throwable) {}
+
+                if (currentCameraMode != normalized) {
+                    if (localVideoTrack == null) {
+                        startLocalMedia(preferFrontCamera = preferFront)
+                    } else {
+                        restartCameraInternal(preferFrontCamera = preferFront)
+                    }
+                    currentCameraMode = normalized
+                    Log.i("WebRtcClient", "Cámara cambiada a $normalized")
+                }
+            }
+
+            else -> Log.w("WebRtcClient", "Modo de cámara desconocido: $mode")
+        }
     }
 
     fun switchCamera() {
@@ -447,6 +513,7 @@ class WebRtcClient(
         localAudioTrack?.dispose()
         localAudioTrack = null
 
+        currentCameraMode = "OFF"
         pendingCandidates.clear()
 
         try {

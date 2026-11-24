@@ -216,6 +216,18 @@ class AppSessionViewModel(
         _uiState.value = destinationForRole(sessionPreferences.getSavedRole())
     }
 
+    /**
+     * Regreso del Receptor a su pantalla principal. Nunca navega a Login:
+     * solo ocurre al desconectar una transmisión, no al cerrar sesión.
+     */
+    fun returnToReceiverHome() {
+        _activeStreamMode.value = null
+        sessionPreferences.saveRole("RECEIVER")
+        _uiState.value = AppUiState.ReceiverDevices
+        refreshDevices()
+        Log.d(TAG, "Receptor desconectado -> ReceiverDevices")
+    }
+
     /** "Salir": detiene el servicio, borra la sesión local y cierra Firebase/Google. */
     fun signOut() {
         val context = getApplication<Application>()

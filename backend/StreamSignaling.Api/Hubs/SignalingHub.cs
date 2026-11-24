@@ -25,6 +25,9 @@ namespace StreamSignaling.Api.Hubs
     ///   SendIceCandidate(code, candidate, mid, idx) -> evento "IceCandidateReceived" al par
     ///   EndSession(sessionCode, deviceId)           -> evento "SessionEnded" a ambos
     ///   RegisterDevicePresence(deviceId)            -> evento "PresenceRegistered" (deviceId)
+    ///   SetCameraMode(sessionCode, mode)            -> "OnCameraModeChanged" (mode)
+    ///   SetMicrophoneEnabled(sessionCode, enabled)  -> "OnMicrophoneEnabledChanged" (enabled)
+    ///   StopStream(sessionCode)                     -> "OnStreamStopped"
     ///
     /// Eventos adicionales del servidor:
     ///   ReceiverJoined(code)  -> al emisor cuando el receptor se une
@@ -144,6 +147,9 @@ namespace StreamSignaling.Api.Hubs
 
             Sessions[code] = session;
 
+            // Necesario para que los controles remotos lleguen al grupo de la sala.
+            await Groups.AddToGroupAsync(Context.ConnectionId, code);
+
             await Clients.Caller.SendAsync("SessionCreated", code);
 
             // Si el receptor llegó antes (flujo FCM + request-stream), avisamos
@@ -176,6 +182,9 @@ namespace StreamSignaling.Api.Hubs
 
             session.ReceptorConnectionId = Context.ConnectionId;
             session.ReceptorDeviceId = deviceId;
+
+            // Necesario para que los controles remotos lleguen al grupo de la sala.
+            await Groups.AddToGroupAsync(Context.ConnectionId, code);
 
             await Clients.Caller.SendAsync("SessionJoined", session.SessionCode);
 
@@ -305,6 +314,61 @@ namespace StreamSignaling.Api.Hubs
                 await Clients.Client(session.ReceptorConnectionId).SendAsync("OnToggleMuteRequested", isMuted);
             }
         }
+
+        /// <summary>
+        /// Cambia el modo de cámara del Emisor ("BACK", "FRONT" u "OFF").
+        /// Solo miembros de la sala pueden invocarlo; se reenvía al otro extremo.
+        /// </summary>
+        public async Task SetCameraMode(string sessionCode, string mode)
+        {
+            var code = Normalize(sessionCode);
+            if (!Sessions.TryGetValue(code, out var session) || !IsSessionMember(session))
+            {
+                return;
+            }
+
+            var normalizedMode = (mode ?? string.Empty).Trim().ToUpperInvariant();
+            if (normalizedMode != "BACK" && normalizedMode != "FRONT" && normalizedMode != "OFF")
+            {
+                return;
+            }
+
+            await Clients.OthersInGroup(code).SendAsync("OnCameraModeChanged", normalizedMode);
+        }
+
+        /// <summary>
+        /// Activa/desactiva el micrófono del Emisor. Solo miembros de la sala.
+        /// </summary>
+        public async Task SetMicrophoneEnabled(string sessionCode, bool enabled)
+        {
+            var code = Normalize(sessionCode);
+            if (!Sessions.TryGetValue(code, out var session) || !IsSessionMember(session))
+            {
+                return;
+            }
+
+            await Clients.OthersInGroup(code).SendAsync("OnMicrophoneEnabledChanged", enabled);
+        }
+
+        /// <summary>
+        /// Detiene el streaming del Emisor sin destruir la sesión.
+        /// Solo miembros de la sala.
+        /// </summary>
+        public async Task StopStream(string sessionCode)
+        {
+            var code = Normalize(sessionCode);
+            if (!Sessions.TryGetValue(code, out var session) || !IsSessionMember(session))
+            {
+                return;
+            }
+
+            await Clients.OthersInGroup(code).SendAsync("OnStreamStopped");
+        }
+
+        /// <summary>Comprueba que la conexión actual pertenece a la sesión.</summary>
+        private bool IsSessionMember(StreamSession session) =>
+            session.EmisorDeviceId == Context.ConnectionId ||
+            session.ReceptorConnectionId == Context.ConnectionId;
 
         public override async Task OnDisconnectedAsync(Exception? exception)
         {

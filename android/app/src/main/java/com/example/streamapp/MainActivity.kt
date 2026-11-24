@@ -3,6 +3,7 @@ package com.example.streamapp
 import android.content.pm.ActivityInfo
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -95,9 +96,13 @@ class MainActivity : ComponentActivity() {
                     }
 
                     is AppUiState.ActiveReceiver -> {
+                        // Red de seguridad: atrás/desconectar siempre vuelven a
+                        // ReceiverDevices, nunca a Login.
+                        BackHandler { viewModel.returnToReceiverHome() }
                         ReceiverScreen(
                             initialSessionCode = state.sessionCode,
-                            onBackPressed = { viewModel.stopStreaming() }
+                            onBackPressed = { viewModel.returnToReceiverHome() },
+                            onDisconnected = { viewModel.returnToReceiverHome() }
                         )
                     }
                 }

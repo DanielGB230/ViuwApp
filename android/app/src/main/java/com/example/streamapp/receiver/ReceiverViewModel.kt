@@ -23,7 +23,8 @@ data class ReceiverUiState(
     val status: String = "Ingresa el código de 6 caracteres",
     val isConnecting: Boolean = false,
     val isConnected: Boolean = false,
-    val isMuted: Boolean = false,
+    val cameraMode: String = "BACK",
+    val isMicEnabled: Boolean = true,
     val error: String? = null
 )
 
@@ -59,6 +60,8 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                 sessionCode = code,
                 status = "Conectando al servidor...",
                 isConnecting = true,
+                cameraMode = "BACK",
+                isMicEnabled = true,
                 error = null
             )
         }
@@ -181,23 +184,50 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         cleanup()
     }
 
-    /** Pide al Emisor que cambie de cámara (frontal/trasera). */
-    fun switchCamera() {
+    /**
+     * Selecciona el modo de cámara remoto: "BACK", "FRONT" u "OFF".
+     * El estado local se actualiza al instante y se envía al Emisor.
+     */
+    fun selectCameraMode(mode: String) {
+        val normalized = mode.trim().uppercase()
+        if (normalized != "BACK" && normalized != "FRONT" && normalized != "OFF") return
+
+        _uiState.update { it.copy(cameraMode = normalized) }
+
         val code = sessionCode
         if (code.isEmpty()) return
-        viewModelScope.launch { signalR.requestSwitchCamera(code) }
+        viewModelScope.launch { signalR.setCameraMode(code, normalized) }
     }
 
-    /** Alterna el micrófono remoto del Emisor. */
-    fun toggleMute() {
-        val newMuted = !_uiState.value.isMuted
-        _uiState.update { it.copy(isMuted = newMuted) }
+    /** Activa/desactiva el micrófono remoto del Emisor. */
+    fun toggleMicrophone() {
+        val newEnabled = !_uiState.value.isMicEnabled
+        _uiState.update { it.copy(isMicEnabled = newEnabled) }
+
         val code = sessionCode
         if (code.isEmpty()) return
-        viewModelScope.launch { signalR.requestToggleMute(code, newMuted) }
+        viewModelScope.launch { signalR.setMicrophoneEnabled(code, newEnabled) }
     }
 
-    private fun cleanup() {
+    /**
+     * Desconexión explícita: pide al Emisor volver a standby, libera el
+     * WebRtcClient local y avisa para navegar a ReceiverDevices.
+     */
+    fun disconnect(onDisconnected: () -> Unit = {}) {
+        val code = sessionCode
+        viewModelScope.launch {
+            try {
+                if (code.isNotEmpty()) {
+                    signalR.stopStream(code)
+                }
+            } catch (_: Throwable) {
+            }
+            cleanup(notifyServer = false)
+            onDisconnected()
+        }
+    }
+
+    private fun cleanup(notifyServer: Boolean = true) {
         remoteRenderer?.let { renderer ->
             remoteTrack?.let { track ->
                 try {
@@ -212,7 +242,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         sessionCode = ""
         viewModelScope.launch {
             try {
-                if (code.isNotEmpty()) {
+                if (notifyServer && code.isNotEmpty()) {
                     signalR.endSession(code, deviceId)
                 }
             } catch (_: Throwable) {}
@@ -222,9 +252,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
         }
         webRtc?.close()
         webRtc = null
-        _uiState.update {
-            ReceiverUiState(status = "Desconectado", isConnected = false)
-        }
+        _uiState.value = ReceiverUiState(status = "Desconectado")
     }
 
     fun attachRemoteRenderer(renderer: SurfaceViewRenderer) {
