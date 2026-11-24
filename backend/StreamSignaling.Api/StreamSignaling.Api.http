@@ -1,0 +1,6 @@
+@StreamSignaling.Api_HostAddress = http://localhost:5010
+
+GET {{StreamSignaling.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

@@ -1,0 +1,100 @@
+# =============================================================================
+# ViuwApp - Monorepo .NET + Android + Firebase
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Credenciales críticas (NUNCA subir al repositorio)
+# -----------------------------------------------------------------------------
+**/firebase-adminsdk*.json
+**/google-services.json
+appsettings.Development.json
+appsettings.Production.json
+*.pfx
+*.jks
+*.keystore
+.env
+.env.*
+!.env.example
+secrets.json
+**/serviceAccount*.json
+
+# -----------------------------------------------------------------------------
+# .NET / C#
+# -----------------------------------------------------------------------------
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+TestResults/
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+.vscode/
+*.db
+*.db-shm
+*.db-wal
+*.mdf
+*.ldf
+
+# -----------------------------------------------------------------------------
+# Android / Gradle / Kotlin
+# -----------------------------------------------------------------------------
+.gradle/
+**/build/
+local.properties
+.idea/
+*.iml
+captures/
+.cxx/
+.kotlin/
+android/.gradle/
+android/app/release/
+android/app/debug/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+output-metadata.json
+
+# -----------------------------------------------------------------------------
+# Sistema operativo / Logs
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.log
+*.tmp
+*.temp
+*.swp
+*~
+
+
+@"
+
+# Binarios, herramientas locales y artefactos de tools/
+tools/gradle-dist/
+tools/libinspect/
+tools/*.zip
+tools/*.exe
+tools/*.jar
+tools/*.aar
+tools/*.so
+tools/*.txt
+tools/*.png
+tools/*.json
+tools/*.xml
+tools/*.log
+
+# Logs de build y credenciales sensibles
+*build*.txt
+*build*.log
+**/firebase-adminsdk*.json
+"@ | Add-Content -Path "D:\ViuwApp\.gitignore" -Encoding UTF8
