@@ -21,7 +21,6 @@ import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpReceiver
 import org.webrtc.RtpSender
 import org.webrtc.RtpTransceiver
-import org.webrtc.RtpTransceiver.RtpTransceiverDirection
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoCapturer
@@ -132,37 +131,82 @@ class WebRtcClient(
         }
     }
 
-    /** Crea el pipeline de vídeo sin abrir la cámara todavía. */
-    private fun ensureVideoPipeline() {
-        if (surfaceTextureHelper == null) {
-            surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
+    /** Garantiza que existan VideoSource y VideoTrack sin abrir la cámara. */
+    private fun ensureVideoPipeline(): VideoTrack? {
+        val source = videoSource ?: factory.createVideoSource(false).also { videoSource = it }
+        localVideoTrack?.let { return it }
+
+        val track = factory.createVideoTrack("video0", source)
+        localVideoTrack = track
+
+        // Si la PeerConnection ya existe y aún no hay sender, adjunta el track.
+        if (videoSender == null) {
+            try {
+                peerConnection?.let { pc ->
+                    videoSender = pc.addTrack(track, listOf("stream0"))
+                }
+            } catch (t: Throwable) {
+                Log.w("WebRtcClient", "No se pudo adjuntar la pista de vídeo: ${t.message}")
+            }
         }
-        if (videoSource == null) {
-            videoSource = factory.createVideoSource(false)
-        }
+        return track
     }
 
-    /** Abre la cámara en el lente pedido y la adjunta al sender de vídeo. */
-    private fun startVideoCapture(preferFrontCamera: Boolean): VideoTrack? {
+    /** Garantiza que existan AudioSource y AudioTrack sin activar el micrófono. */
+    private fun ensureAudioTrack(): AudioTrack? {
+        localAudioTrack?.let { return it }
+
+        val source = audioSource ?: factory.createAudioSource(MediaConstraints()).also { audioSource = it }
+        val track = factory.createAudioTrack("audio0", source)
+        localAudioTrack = track
+
+        if (audioSender == null) {
+            try {
+                peerConnection?.let { pc ->
+                    audioSender = pc.addTrack(track, listOf("stream0"))
+                }
+            } catch (t: Throwable) {
+                Log.w("WebRtcClient", "No se pudo adjuntar la pista de audio: ${t.message}")
+            }
+        }
+        return track
+    }
+
+    /**
+     * Abre la cámara en el lente pedido y habilita la pista ya negociada.
+     * Antes libera cualquier capturador/helper anterior y crea uno nuevo.
+     */
+    private fun startVideoCapture(preferFrontCamera: Boolean): Boolean {
         if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA)
             != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             listener.onError("Permiso de cámara no concedido al intentar iniciar captura")
-            return null
+            return false
         }
 
-        ensureVideoPipeline()
-        val source = videoSource ?: return null
-        val helper = surfaceTextureHelper ?: return null
+        val track = ensureVideoPipeline() ?: run {
+            listener.onError("No se pudo crear la pista de vídeo")
+            return false
+        }
+        val source = videoSource ?: return false
 
+        // Libera cámara/helper previos antes de recrearlos.
         stopAndReleaseCapturer()
+
+        val helper = SurfaceTextureHelper.create("CaptureThread", eglBase.eglBaseContext)
+        surfaceTextureHelper = helper
 
         val capturer = createCameraCapturer(preferFrontCamera) ?: run {
             listener.onError("No se encontró ninguna cámara disponible")
-            return null
+            try {
+                helper.dispose()
+            } catch (_: Throwable) {}
+            surfaceTextureHelper = null
+            return false
         }
+
         videoCapturer = capturer
-        capturer.initialize(helper, context, source.capturerObserver)
         try {
+            capturer.initialize(helper, context, source.capturerObserver)
             capturer.startCapture(1280, 720, 30)
             Log.i("WebRtcClient", "startCapture solicitado a 1280x720@30fps")
         } catch (t: Throwable) {
@@ -172,20 +216,18 @@ class WebRtcClient(
             } catch (t2: Throwable) {
                 listener.onError("No se pudo iniciar la cámara: ${t2.message}")
                 stopAndReleaseCapturer()
-                return null
+                return false
             }
         }
 
-        val track = localVideoTrack ?: factory.createVideoTrack("video0", source).also {
-            localVideoTrack = it
-        }
         try {
             track.setEnabled(true)
         } catch (_: Throwable) {}
-        attachVideoTrack(track)
-        return track
+
+        return true
     }
 
+    /** Detiene y libera el capturador y el SurfaceTextureHelper actuales. */
     private fun stopAndReleaseCapturer() {
         try {
             videoCapturer?.stopCapture()
@@ -194,48 +236,19 @@ class WebRtcClient(
             videoCapturer?.dispose()
         } catch (_: Throwable) {}
         videoCapturer = null
-    }
-
-    private fun attachVideoTrack(track: VideoTrack) {
-        try {
-            videoSender?.setTrack(track, false)
-        } catch (t: Throwable) {
-            listener.onError("No se pudo adjuntar la cámara: ${t.message}")
-        }
-    }
-
-    /** Crea (si hace falta) el micrófono y lo adjunta al sender de audio. */
-    private fun startAudioCapture() {
-        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO)
-            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            listener.onError("Permiso de micrófono no concedido al intentar activarlo")
-            return
-        }
-
-        val track = localAudioTrack ?: run {
-            val source = factory.createAudioSource(MediaConstraints())
-            audioSource = source
-            factory.createAudioTrack("audio0", source).also { localAudioTrack = it }
-        }
 
         try {
-            track.setEnabled(true)
+            surfaceTextureHelper?.dispose()
         } catch (_: Throwable) {}
-
-        try {
-            audioSender?.setTrack(track, false)
-        } catch (t: Throwable) {
-            listener.onError("No se pudo adjuntar el micrófono: ${t.message}")
-        }
-        micEnabled = true
+        surfaceTextureHelper = null
     }
 
     /**
-     * Cambia el modo de cámara local.
-     *  - "FRONT"/"BACK": abre el capturador en el lente pedido, crea/habilita
-     *    la pista local y la adjunta con videoSender.setTrack(track, false).
-     *  - "OFF": desadjunta la pista, detiene y libera el capturador para cerrar
-     *    la sesión de cámara del sistema (sin punto verde).
+     * Cambia el modo de cámara local manteniendo la pista ya negociada.
+     *  - "FRONT"/"BACK": libera el capturador/helper previos, abre la cámara en
+     *    el lente pedido y habilita localVideoTrack (sin renegociar SDP).
+     *  - "OFF": deshabilita la pista, detiene/libera capturador y helper para
+     *    cerrar la cámara del sistema y apagar el punto verde.
      */
     fun setCameraMode(mode: String) {
         if (!isSender) return
@@ -243,16 +256,11 @@ class WebRtcClient(
         when (val normalized = mode.trim().uppercase()) {
             "OFF" -> {
                 try {
-                    videoSender?.setTrack(null, false)
-                } catch (t: Throwable) {
-                    Log.w("WebRtcClient", "No se pudo desadjuntar el vídeo: ${t.message}")
-                }
-                stopAndReleaseCapturer()
-                try {
                     localVideoTrack?.setEnabled(false)
                 } catch (_: Throwable) {}
+                stopAndReleaseCapturer()
                 currentCameraMode = "OFF"
-                Log.i("WebRtcClient", "Cámara apagada (hardware liberado)")
+                Log.i("WebRtcClient", "Cámara apagada (hardware liberado, track deshabilitado)")
             }
 
             "FRONT", "BACK" -> {
@@ -261,13 +269,13 @@ class WebRtcClient(
                     try {
                         localVideoTrack?.setEnabled(true)
                     } catch (_: Throwable) {}
-                    localVideoTrack?.let { attachVideoTrack(it) }
                     return
                 }
 
-                val track = startVideoCapture(preferFrontCamera = preferFront) ?: return
-                currentCameraMode = normalized
-                Log.i("WebRtcClient", "Cámara activa en modo $normalized (track=${track.id()})")
+                if (startVideoCapture(preferFrontCamera = preferFront)) {
+                    currentCameraMode = normalized
+                    Log.i("WebRtcClient", "Cámara activa en modo $normalized")
+                }
             }
 
             else -> Log.w("WebRtcClient", "Modo de cámara desconocido: $mode")
@@ -283,34 +291,19 @@ class WebRtcClient(
     }
 
     /**
-     * Activa/desactiva el micrófono local.
-     *  - true: crea audioSource + localAudioTrack y lo adjunta al sender.
-     *  - false: desadjunta y libera track/source para cerrar AudioRecord.
+     * Activa/desactiva el micrófono local sin romper la pista negociada.
+     * Al deshabilitar, la captura se detiene pero el track sigue en el SDP.
      */
     fun setAudioEnabled(enabled: Boolean) {
         if (!isSender) return
 
-        if (enabled) {
-            startAudioCapture()
-        } else {
-            try {
-                audioSender?.setTrack(null, false)
-            } catch (t: Throwable) {
-                Log.w("WebRtcClient", "No se pudo desadjuntar el audio: ${t.message}")
-            }
-            try {
-                localAudioTrack?.setEnabled(false)
-            } catch (_: Throwable) {}
-            try {
-                localAudioTrack?.dispose()
-            } catch (_: Throwable) {}
-            localAudioTrack = null
-            try {
-                audioSource?.dispose()
-            } catch (_: Throwable) {}
-            audioSource = null
-            micEnabled = false
-            Log.i("WebRtcClient", "Micrófono apagado (hardware liberado)")
+        try {
+            val track = ensureAudioTrack()
+            track?.setEnabled(enabled)
+            micEnabled = enabled
+            Log.i("WebRtcClient", "Micrófono ${if (enabled) "activado" else "desactivado"}")
+        } catch (t: Throwable) {
+            listener.onError("No se pudo cambiar el micrófono: ${t.message}")
         }
     }
 
@@ -373,42 +366,29 @@ class WebRtcClient(
         peerConnection = pc
 
         if (isSender) {
-            // Canales SEND_ONLY negociados sin hardware: los senders arrancan
-            // sin pista, así Android no abre cámara ni micrófono.
+            // Fase 16: ambos tracks se crean y se negocian en el SDP desde el
+            // inicio, pero deshabilitados. No se crea ni inicia VideoCapturer,
+            // así que no se abre hardware ni aparece el punto verde de Android.
             try {
-                val videoTransceiver = pc.addTransceiver(
-                    MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO,
-                    RtpTransceiver.RtpTransceiverInit(
-                        RtpTransceiverDirection.SEND_ONLY,
-                        listOf("stream0")
-                    )
-                )
-                val audioTransceiver = pc.addTransceiver(
-                    MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
-                    RtpTransceiver.RtpTransceiverInit(
-                        RtpTransceiverDirection.SEND_ONLY,
-                        listOf("stream0")
-                    )
-                )
-                videoSender = videoTransceiver?.sender
-                audioSender = audioTransceiver?.sender
-                videoSender?.setTrack(null, false)
-                audioSender?.setTrack(null, false)
-                Log.i("WebRtcClient", "Transceptores SEND_ONLY creados sin pistas locales")
-            } catch (t: Throwable) {
-                listener.onError("No se pudieron crear los transceptores: ${t.message}")
-            }
+                val vSource = videoSource ?: factory.createVideoSource(false).also { videoSource = it }
+                val aSource = audioSource ?: factory.createAudioSource(MediaConstraints()).also { audioSource = it }
 
-            // Si ya existieran pistas (activación temprana), adjuntarlas.
-            localVideoTrack?.let { track ->
-                try {
-                    videoSender?.setTrack(track, false)
-                } catch (_: Throwable) {}
-            }
-            localAudioTrack?.let { track ->
-                try {
-                    audioSender?.setTrack(track, false)
-                } catch (_: Throwable) {}
+                val vTrack = localVideoTrack ?: factory.createVideoTrack("video0", vSource).also {
+                    localVideoTrack = it
+                }
+                val aTrack = localAudioTrack ?: factory.createAudioTrack("audio0", aSource).also {
+                    localAudioTrack = it
+                }
+
+                vTrack.setEnabled(false)
+                aTrack.setEnabled(false)
+
+                videoSender = pc.addTrack(vTrack, listOf("stream0"))
+                audioSender = pc.addTrack(aTrack, listOf("stream0"))
+
+                Log.i("WebRtcClient", "Tracks de vídeo/audio negociados en SDP (deshabilitados)")
+            } catch (t: Throwable) {
+                listener.onError("No se pudieron preparar las pistas locales: ${t.message}")
             }
         }
 

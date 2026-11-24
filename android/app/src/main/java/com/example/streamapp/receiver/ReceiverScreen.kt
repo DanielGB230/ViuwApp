@@ -76,18 +76,23 @@ fun ReceiverScreen(
 
     val rendererHolder = remember { mutableStateOf<SurfaceViewRenderer?>(null) }
 
-    // Sincronización reactiva del VideoTrack remoto y el SurfaceViewRenderer
-    LaunchedEffect(remoteVideoTrack, rendererHolder.value) {
+    // Enlaza el VideoTrack remoto al SurfaceViewRenderer que queda siempre
+    // montado (incluso con la cámara apagada), evitando recrear el visor.
+    DisposableEffect(remoteVideoTrack, rendererHolder.value) {
         val track = remoteVideoTrack
         val renderer = rendererHolder.value
         if (track != null && renderer != null) {
             try {
-                track.removeSink(renderer)
-            } catch (_: Throwable) {}
-            try {
                 track.setEnabled(true)
             } catch (_: Throwable) {}
             track.addSink(renderer)
+        }
+        onDispose {
+            if (track != null && renderer != null) {
+                try {
+                    track.removeSink(renderer)
+                } catch (_: Throwable) {}
+            }
         }
     }
 
@@ -248,40 +253,45 @@ fun ReceiverScreen(
                         )
                     }
 
-                    if (!isLive && !state.isMicEnabled) {
-                        Column(
+                    // Capa opaca sobre el visor: el SurfaceViewRenderer sigue
+                    // montado debajo, así al activar la cámara el vídeo aparece
+                    // sin recrear la vista ni producir pantalla negra.
+                    if (!isLive) {
+                        Box(
                             modifier = Modifier
-                                .align(Alignment.Center)
-                                .padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = 0.92f)),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.VideocamOff,
-                                contentDescription = null,
-                                tint = Color(0xFFCBD5E1),
-                                modifier = Modifier.size(40.dp)
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                text = "Cámara y micrófono apagados",
-                                color = Color(0xFFCBD5E1),
-                                fontSize = 14.sp,
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            Button(onClick = { viewModel.selectCameraMode("BACK") }) {
-                                Icon(Icons.Default.Videocam, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("Activar Cámara")
+                            Column(
+                                modifier = Modifier.padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.VideocamOff,
+                                    contentDescription = null,
+                                    tint = Color(0xFFCBD5E1),
+                                    modifier = Modifier.size(40.dp)
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = if (state.isMicEnabled) {
+                                        "Solo audio activo"
+                                    } else {
+                                        "Conectado — Cámara y micrófono apagados"
+                                    },
+                                    color = Color(0xFFCBD5E1),
+                                    fontSize = 14.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(Modifier.height(12.dp))
+                                Button(onClick = { viewModel.selectCameraMode("BACK") }) {
+                                    Icon(Icons.Default.Videocam, contentDescription = null)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Activar Cámara")
+                                }
                             }
                         }
-                    } else if (!isLive) {
-                        Text(
-                            text = "Solo audio activo",
-                            modifier = Modifier.align(Alignment.Center),
-                            color = Color(0xFFCBD5E1),
-                            fontSize = 14.sp
-                        )
                     }
                 }
 

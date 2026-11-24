@@ -49,7 +49,7 @@ fun RoleSetupScreen(
                 title = { Text("Configurar rol") },
                 actions = {
                     TextButton(onClick = onSignOutClicked) {
-                        Text("Salir")
+                        Text("Cerrar sesión")
                     }
                 }
             )

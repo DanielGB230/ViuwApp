@@ -115,7 +115,8 @@ class MainActivity : ComponentActivity() {
                     is AppUiState.SenderStandby -> {
                         SenderStandbyScreen(
                             authRepository = app.authRepository,
-                            onSignOutClicked = { viewModel.signOut() }
+                            // "Salir" -> selección de rol (no cierra la cuenta).
+                            onSignOutClicked = { viewModel.exitToRoleSelection() }
                         )
                     }
 
@@ -135,7 +136,8 @@ class MainActivity : ComponentActivity() {
                             onManualCodeConnect = { code ->
                                 viewModel.joinSessionManually(code)
                             },
-                            onSignOutClicked = { viewModel.signOut() }
+                            // "Salir" -> selección de rol (no cierra la cuenta).
+                            onSignOutClicked = { viewModel.exitToRoleSelection() }
                         )
                     }
 

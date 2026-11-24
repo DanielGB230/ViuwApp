@@ -222,6 +222,25 @@ class AppSessionViewModel(
         Log.d(TAG, "Receptor desconectado -> ReceiverDevices")
     }
 
+    /**
+     * "Salir" de la pantalla activa: detiene el servicio y regresa a la
+     * selección de rol (Emisor/Receptor) sin cerrar la cuenta de Google.
+     */
+    fun exitToRoleSelection() {
+        val context = getApplication<Application>()
+
+        try {
+            context.stopService(Intent(context, StreamingForegroundService::class.java))
+        } catch (e: Exception) {
+            Log.w(TAG, "No se pudo detener StreamingForegroundService: ${e.localizedMessage}", e)
+        }
+
+        _activeStreamMode.value = null
+        sessionPreferences.clearRole()
+        _uiState.value = AppUiState.RoleSetup
+        Log.d(TAG, "Salir -> RoleSetup (sesión conservada)")
+    }
+
     /** "Salir": detiene el servicio, borra la sesión local y cierra Firebase/Google. */
     fun signOut() {
         val context = getApplication<Application>()

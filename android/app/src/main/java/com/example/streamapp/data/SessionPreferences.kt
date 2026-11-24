@@ -32,6 +32,15 @@ class SessionPreferences(context: Context) {
         prefs.edit().putString(KEY_ROLE, role).commit()
     }
 
+    /**
+     * Borra únicamente el rol guardado, conservando la sesión del usuario.
+     * Se usa al pulsar "Salir" para volver a la selección de rol sin cerrar
+     * la cuenta de Google/Firebase.
+     */
+    fun clearRole() {
+        prefs.edit().remove(KEY_ROLE).commit()
+    }
+
     /** Guarda los datos básicos del usuario autenticado. */
     fun saveUser(uid: String, email: String?, name: String?) {
         prefs.edit()
