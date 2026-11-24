@@ -10,6 +10,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -25,8 +26,12 @@
         <!-- Servicio en segundo plano para la transmisión con indicadores de cámara y micrófono -->
         <service
             android:name="com.example.streamapp.service.StreamingForegroundService"
-            android:foregroundServiceType="camera|microphone"
-            android:exported="false" />
+            android:foregroundServiceType="camera|microphone|specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="parental_control_presence" />
+        </service>
 
         <!-- BootReceiver: reactiva la presencia SENDER al reiniciar el dispositivo -->
         <receiver

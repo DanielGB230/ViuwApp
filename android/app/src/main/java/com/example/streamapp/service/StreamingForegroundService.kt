@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -42,6 +43,9 @@ class StreamingForegroundService : LifecycleService() {
         const val ACTION_START = "com.example.streamapp.action.START_STREAM"
         const val ACTION_STOP = "com.example.streamapp.action.STOP_STREAM"
 
+        /** Standby: mantiene la presencia SignalR sin abrir cámara/micrófono. */
+        const val ACTION_STANDBY = "com.example.streamapp.action.STANDBY"
+
         /** Alias con el nombre usado por el contrato de la Fase 11. */
         const val ACTION_START_STREAM = ACTION_START
 
@@ -60,6 +64,8 @@ class StreamingForegroundService : LifecycleService() {
     private var sessionCode: String = ""
     private var streamingStarted = false
     private var offerSent = false
+    private var presenceStarted = false
+    private var standbyMode = false
 
     override fun onCreate() {
         super.onCreate()
@@ -76,9 +82,17 @@ class StreamingForegroundService : LifecycleService() {
                 return START_NOT_STICKY
             }
 
+            ACTION_STANDBY -> {
+                Log.d(TAG, "ACTION_STANDBY recibida (solo presencia)")
+                standbyMode = true
+                startAsForeground(standby = true)
+                startStandbyPresence()
+            }
+
             ACTION_START -> {
                 val sessionId = intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()
                 Log.d(TAG, "ACTION_START recibida (sessionId=$sessionId)")
+                standbyMode = false
                 // El foreground debe declararse cuanto antes (límite de 5 s).
                 startAsForeground()
                 startStreaming(sessionId)
@@ -105,6 +119,12 @@ class StreamingForegroundService : LifecycleService() {
         }
         streamingStarted = true
 
+        // Si venimos de standby, cambiamos el tipo de foreground a cámara|micrófono.
+        if (standbyMode) {
+            standbyMode = false
+            startAsForeground()
+        }
+
         serviceScope.launch {
             try {
                 if (webRtc == null) {
@@ -124,6 +144,47 @@ class StreamingForegroundService : LifecycleService() {
                 client.createSession(pendingSessionCode)
             } catch (t: Throwable) {
                 Log.e(TAG, "No se pudo iniciar el streaming", t)
+                stopStreamingAndSelf()
+            }
+        }
+    }
+
+    /**
+     * Modo standby (arranque tras reinicio): conecta SignalR y registra la
+     * presencia del dispositivo, sin abrir cámara ni micrófono. Cuando el
+     * Receptor solicita el stream se arranca el streaming real.
+     */
+    private fun startStandbyPresence() {
+        if (presenceStarted) {
+            Log.d(TAG, "Presencia ya iniciada; se ignora ACTION_STANDBY duplicada")
+            return
+        }
+        presenceStarted = true
+
+        serviceScope.launch {
+            try {
+                val client = signalR ?: SignalRClient().also { signalR = it }
+                client.connect()
+                registerSignalRHandlers(client)
+
+                client.onStartStream { sessionId ->
+                    Log.d(TAG, "StartStream recibido en standby: sessionId=$sessionId")
+                    startStreaming(sessionId)
+                }
+
+                val hardwareId = Settings.Secure.getString(
+                    contentResolver,
+                    Settings.Secure.ANDROID_ID
+                ).orEmpty()
+
+                if (hardwareId.isNotBlank()) {
+                    client.registerDevicePresence(hardwareId)
+                    Log.d(TAG, "Presencia standby registrada para $hardwareId")
+                } else {
+                    Log.w(TAG, "ANDROID_ID vacío; no se pudo registrar presencia")
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "No se pudo iniciar la presencia en standby", t)
                 stopStreamingAndSelf()
             }
         }
@@ -268,16 +329,21 @@ class StreamingForegroundService : LifecycleService() {
     // Foreground service / notificación
     // ---------------------------------------------------------------------
 
-    private fun startAsForeground() {
+    private fun startAsForeground(standby: Boolean = false) {
         val types = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            when {
+                !standby -> ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                // El tipo specialUse solo existe a partir de Android 14 (API 34).
+                Build.VERSION.SDK_INT >= 34 -> ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            }
         } else {
             0
         }
 
         try {
-            ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), types)
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(standby), types)
         } catch (t: Throwable) {
             // Si el sistema rechaza el FGS (p. ej. permisos revocados), detenemos el servicio.
             Log.e(TAG, "No se pudo iniciar el foreground service", t)
@@ -307,7 +373,7 @@ class StreamingForegroundService : LifecycleService() {
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(standby: Boolean = false): Notification {
         val contentIntent = PendingIntent.getActivity(
             this,
             0,
@@ -315,9 +381,16 @@ class StreamingForegroundService : LifecycleService() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val title = if (standby) "Dispositivo en línea" else "Transmisión activa"
+        val text = if (standby) {
+            "Listo para recibir una solicitud de transmisión"
+        } else {
+            "Tu cámara y micrófono están transmitiendo"
+        }
+
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("Transmisión activa")
-            .setContentText("Tu cámara y micrófono están transmitiendo")
+            .setContentTitle(title)
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentIntent(contentIntent)
             .setOngoing(true)
