@@ -27,7 +27,8 @@
         <service
             android:name="com.example.streamapp.service.StreamingForegroundService"
             android:foregroundServiceType="camera|microphone|specialUse"
-            android:exported="false">
+            android:exported="false"
+            android:stopWithTask="false">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="parental_control_presence" />

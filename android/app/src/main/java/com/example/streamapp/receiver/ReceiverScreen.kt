@@ -199,8 +199,12 @@ fun ReceiverScreen(
                 }
             } else {
                 val isLive = state.cameraMode != "OFF"
+                // Badge: oculta "Conectado — Cámara y micrófono apagados" mientras
+                // esperamos al emisor o está en timeout, para evitar texto duplicado.
                 val badgeText = when {
                     isLive -> "EN VIVO"
+                    state.isWaitingForEmitter -> "Despertando dispositivo..."
+                    state.emitterTimeout -> "Sin conexión"
                     state.isMicEnabled -> "Solo audio activo"
                     else -> "Conectado — Cámara y micrófono apagados"
                 }

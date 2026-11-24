@@ -46,6 +46,8 @@ namespace StreamSignaling.Api.Services
                     Data = new Dictionary<string, string>
                     {
                         ["action"] = "START_STREAM",
+                        ["type"] = "START_STREAM",
+                        ["sessionCode"] = sessionId,
                         ["sessionId"] = sessionId
                     },
                     Android = new AndroidConfig

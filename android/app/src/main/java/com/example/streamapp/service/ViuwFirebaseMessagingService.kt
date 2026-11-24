@@ -53,16 +53,20 @@ class ViuwFirebaseMessagingService : FirebaseMessagingService() {
 
         if (streamAction == "START_STREAM" || streamAction == "WAKE_AND_STREAM") {
             Log.i(TAG, "Acción $streamAction recibida por FCM: $data")
-            val sessionId = data["sessionId"].orEmpty()
-            val intent = Intent(this, StreamingForegroundService::class.java).apply {
-                action = StreamingForegroundService.ACTION_START_STREAM
-                putExtra(StreamingForegroundService.EXTRA_SESSION_ID, sessionId)
-            }
-            try {
-                ContextCompat.startForegroundService(this, intent)
-            } catch (e: Exception) {
-                Log.w(TAG, "ForegroundService no permitido en background (${e.message}); conectando SignalR directo para $sessionId")
-                handleStreamInWorker(sessionId)
+            val sessionCode = data["sessionCode"] ?: data["sessionId"] ?: ""
+            if (sessionCode.isNotBlank()) {
+                val intent = Intent(this, StreamingForegroundService::class.java).apply {
+                    action = StreamingForegroundService.ACTION_START_STREAM
+                    putExtra(StreamingForegroundService.EXTRA_SESSION_CODE, sessionCode)
+                }
+                try {
+                    ContextCompat.startForegroundService(this, intent)
+                } catch (e: Exception) {
+                    Log.w(TAG, "ForegroundService no permitido en background (${e.message}); conectando SignalR directo para $sessionCode")
+                    handleStreamInWorker(sessionCode)
+                }
+            } else {
+                Log.w(TAG, "FCM START_STREAM sin sessionCode/sessionId: $data")
             }
         }
     }

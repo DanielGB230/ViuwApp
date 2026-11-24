@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
 import com.example.streamapp.MainActivity
+import com.example.streamapp.data.SessionPreferences
 import com.example.streamapp.network.SignalRClient
 import com.example.streamapp.webrtc.WebRtcClient
 import kotlinx.coroutines.CoroutineScope
@@ -52,6 +53,7 @@ class StreamingForegroundService : LifecycleService() {
         const val ACTION_START_STREAM = ACTION_START
 
         const val EXTRA_SESSION_ID = "sessionId"
+        const val EXTRA_SESSION_CODE = "sessionCode"
 
         const val NOTIFICATION_CHANNEL_ID = "viuwapp_stream_channel"
         const val NOTIFICATION_ID = 1001
@@ -92,12 +94,15 @@ class StreamingForegroundService : LifecycleService() {
             }
 
             ACTION_START -> {
-                val sessionId = intent.getStringExtra(EXTRA_SESSION_ID).orEmpty()
-                Log.d(TAG, "ACTION_START recibida (sessionId=$sessionId)")
+                // Leer sessionCode (nuevo) o sessionId (legacy) para compatibilidad.
+                val sessionCode = intent.getStringExtra(EXTRA_SESSION_CODE)
+                    .orEmpty()
+                    .ifBlank { intent.getStringExtra(EXTRA_SESSION_ID).orEmpty() }
+                Log.d(TAG, "ACTION_START recibida (sessionCode=$sessionCode)")
                 standbyMode = false
                 // El foreground debe declararse cuanto antes (límite de 5 s).
                 startAsForeground()
-                startStreaming(sessionId)
+                startStreaming(sessionCode)
             }
 
             else -> startAsForeground()
@@ -110,9 +115,9 @@ class StreamingForegroundService : LifecycleService() {
     // Streaming
     // ---------------------------------------------------------------------
 
-    private fun startStreaming(sessionId: String) {
-        if (sessionId.isNotBlank()) {
-            pendingSessionCode = sessionId
+    private fun startStreaming(sessionCode: String) {
+        if (sessionCode.isNotBlank()) {
+            pendingSessionCode = sessionCode
         }
 
         if (streamingStarted) {
@@ -144,8 +149,22 @@ class StreamingForegroundService : LifecycleService() {
                 val client = signalR ?: SignalRClient().also { signalR = it }
                 client.connect()
                 registerSignalRHandlers(client)
-                Log.d(TAG, "SignalR conectado. CreateSession($pendingSessionCode)")
-                client.createSession(pendingSessionCode)
+
+                val hardwareId = Settings.Secure.getString(
+                    contentResolver,
+                    Settings.Secure.ANDROID_ID
+                ).orEmpty()
+
+                if (pendingSessionCode.isNotBlank() && hardwareId.isNotBlank()) {
+                    // FCM despertó al dispositivo: la sesión ya existe en el servidor.
+                    // Unirse directamente en lugar de crear una nueva.
+                    Log.d(TAG, "SignalR conectado. JoinSession($pendingSessionCode)")
+                    client.joinSession(pendingSessionCode, hardwareId)
+                } else {
+                    // Flujo legacy: crear sesión nueva.
+                    Log.d(TAG, "SignalR conectado. CreateSession($pendingSessionCode)")
+                    client.createSession(pendingSessionCode)
+                }
             } catch (t: Throwable) {
                 Log.e(TAG, "No se pudo iniciar el streaming", t)
                 stopStreamingAndSelf()
@@ -523,6 +542,43 @@ class StreamingForegroundService : LifecycleService() {
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        Log.d(TAG, "onTaskRemoved - app cerrada de recientes")
+
+        val prefs = SessionPreferences(applicationContext)
+        if (prefs.getSavedRole() == "SENDER") {
+            Log.i(TAG, "Rol SENDER persistido; programando reconexión automática")
+            PresenceScheduler.scheduleWhenOnline(applicationContext)
+
+            // AlarmManager para forzar re-inicio del servicio en ~2s aunque el sistema lo mate.
+            val alarmIntent = Intent(applicationContext, BootReceiver::class.java)
+                .setAction(Intent.ACTION_MY_PACKAGE_REPLACED)
+            val pendingIntent = PendingIntent.getBroadcast(
+                applicationContext,
+                0,
+                alarmIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            val alarmManager = getSystemService(ALARM_SERVICE) as android.app.AlarmManager
+            val triggerAt = System.currentTimeMillis() + 2000
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setAndAllowWhileIdle(
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.set(
+                    android.app.AlarmManager.RTC_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+            }
+            Log.d(TAG, "AlarmManager programado para reactivar presencia en 2s")
+        }
     }
 
     override fun onDestroy() {
