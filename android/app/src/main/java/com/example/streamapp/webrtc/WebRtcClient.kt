@@ -182,6 +182,16 @@ class WebRtcClient(
         }
     }
 
+    /** Activa o silencia la pista de audio local (micrófono) sin renegociar. */
+    fun setAudioEnabled(enabled: Boolean) {
+        try {
+            localAudioTrack?.setEnabled(enabled)
+            Log.i("WebRtcClient", "Micrófono ${if (enabled) "activado" else "silenciado"}")
+        } catch (t: Throwable) {
+            listener.onError("No se pudo cambiar el micrófono: ${t.message}")
+        }
+    }
+
     private fun createCameraCapturer(preferFrontCamera: Boolean): CameraVideoCapturer? {
         try {
             val enumerator = Camera2Enumerator(context)

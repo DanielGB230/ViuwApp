@@ -153,10 +153,11 @@ fun SenderStandbyScreen(
             // Registrar el handler ANTES de marcar presencia para no perder el evento.
             // Se registra una sola vez aunque el usuario reintente el registro.
             if (!streamHandlerRegistered) {
-                signalR.onStartStreamRequested { sessionId ->
-                    Log.d(TAG, "OnStartStreamRequested recibido: sessionId=$sessionId")
+                // Escucha "StartStream" y "OnStartStreamRequested" (string o JSON).
+                signalR.onStartStream { sessionId ->
+                    Log.d(TAG, "StartStream recibido: sessionId=$sessionId")
                     val intent = Intent(context, StreamingForegroundService::class.java).apply {
-                        action = StreamingForegroundService.ACTION_START
+                        action = StreamingForegroundService.ACTION_START_STREAM
                         putExtra("sessionId", sessionId)
                     }
                     try {

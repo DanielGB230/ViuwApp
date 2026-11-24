@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -166,24 +167,40 @@ namespace StreamSignaling.Api.Controllers
 
             var sessionId = GenerateUniqueSessionCode();
 
-            var signalRNotified = false;
-            if (SignalingHub.TryGetDeviceConnection(device.DeviceHardwareId, out var connectionId) &&
-                !string.IsNullOrWhiteSpace(connectionId))
+            // Emitimos el mismo evento con dos nombres y a los dos grupos posibles
+            // (DeviceHardwareId y LinkedDevice.Id) para que el Emisor lo reciba sin
+            // importar qué identificador esté usando su conexión SignalR.
+            var groups = new List<string>
             {
-                try
-                {
-                    await _hub.Clients
-                        .Client(connectionId)
-                        .SendAsync("OnStartStreamRequested", sessionId, cancellationToken);
-                    signalRNotified = true;
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(
-                        ex,
-                        "No se pudo notificar por SignalR al dispositivo {DeviceId}.",
-                        device.Id);
-                }
+                device.DeviceHardwareId.Trim().ToLowerInvariant(),
+                device.Id.ToString().ToLowerInvariant()
+            };
+
+            var signalRNotified = false;
+            try
+            {
+                await _hub.Clients
+                    .Groups(groups)
+                    .SendAsync("StartStream", sessionId, cancellationToken);
+
+                await _hub.Clients
+                    .Groups(groups)
+                    .SendAsync("OnStartStreamRequested", sessionId, cancellationToken);
+
+                signalRNotified = true;
+
+                _logger.LogInformation(
+                    "StartStream/OnStartStreamRequested enviado al dispositivo {DeviceId} (grupos: {Groups}) con sesión {SessionId}.",
+                    device.Id,
+                    string.Join(", ", groups),
+                    sessionId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "No se pudo notificar por SignalR al dispositivo {DeviceId}.",
+                    device.Id);
             }
 
             var fcmSent = await _fcm.SendStartStreamAsync(device.FcmToken, sessionId, cancellationToken);

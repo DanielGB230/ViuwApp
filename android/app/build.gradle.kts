@@ -19,7 +19,7 @@ android {
         buildConfigField(
             "String",
             "SIGNALING_BASE_URL",
-            "\"https://interracial-algorithm-thick-blowing.trycloudflare.com\""
+            "\"https://781xtrpg-5000.brs.devtunnels.ms\""
         )
     }
 

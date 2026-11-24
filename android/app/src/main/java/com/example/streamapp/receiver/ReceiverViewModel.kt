@@ -23,6 +23,7 @@ data class ReceiverUiState(
     val status: String = "Ingresa el código de 6 caracteres",
     val isConnecting: Boolean = false,
     val isConnected: Boolean = false,
+    val isMuted: Boolean = false,
     val error: String? = null
 )
 
@@ -178,6 +179,22 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
 
     fun leaveSession() {
         cleanup()
+    }
+
+    /** Pide al Emisor que cambie de cámara (frontal/trasera). */
+    fun switchCamera() {
+        val code = sessionCode
+        if (code.isEmpty()) return
+        viewModelScope.launch { signalR.requestSwitchCamera(code) }
+    }
+
+    /** Alterna el micrófono remoto del Emisor. */
+    fun toggleMute() {
+        val newMuted = !_uiState.value.isMuted
+        _uiState.update { it.copy(isMuted = newMuted) }
+        val code = sessionCode
+        if (code.isEmpty()) return
+        viewModelScope.launch { signalR.requestToggleMute(code, newMuted) }
     }
 
     private fun cleanup() {

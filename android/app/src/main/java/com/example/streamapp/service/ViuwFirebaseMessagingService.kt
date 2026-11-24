@@ -48,11 +48,13 @@ class ViuwFirebaseMessagingService : FirebaseMessagingService() {
         val data = remoteMessage.data
         Log.d(TAG, "Mensaje FCM recibido: $data")
 
-        if (data["action"] == "START_STREAM") {
+        val streamAction = data["action"] ?: data["type"]
+
+        if (streamAction == "START_STREAM") {
             Log.i(TAG, "Acción START_STREAM recibida por FCM: $data")
             val sessionId = data["sessionId"].orEmpty()
             val intent = Intent(this, StreamingForegroundService::class.java).apply {
-                action = StreamingForegroundService.ACTION_START
+                action = StreamingForegroundService.ACTION_START_STREAM
                 putExtra(StreamingForegroundService.EXTRA_SESSION_ID, sessionId)
             }
             try {

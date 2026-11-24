@@ -1,6 +1,7 @@
 package com.example.streamapp.receiver
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -10,15 +11,20 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -209,6 +215,39 @@ fun ReceiverScreen(
                     )
                 }
                 Spacer(Modifier.height(12.dp))
+
+                // Controles remotos del Emisor
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { viewModel.switchCamera() },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Cameraswitch,
+                            contentDescription = "Cambiar cámara"
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("Cambiar Cámara")
+                    }
+
+                    OutlinedButton(
+                        onClick = { viewModel.toggleMute() },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = if (state.isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                            contentDescription = if (state.isMuted) "Micrófono silenciado" else "Micrófono activo"
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (state.isMuted) "Silenciado" else "Micrófono")
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
                 Button(
                     onClick = leaveScreen,
                     modifier = Modifier.fillMaxWidth()

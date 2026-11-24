@@ -250,7 +250,7 @@ class SenderViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun startForegroundService() {
         val intent = Intent(getApplication(), StreamingForegroundService::class.java)
-            .setAction(StreamingForegroundService.ACTION_START)
+            .setAction(StreamingForegroundService.ACTION_START_STREAM)
         try {
             ContextCompat.startForegroundService(getApplication(), intent)
         } catch (_: Throwable) {

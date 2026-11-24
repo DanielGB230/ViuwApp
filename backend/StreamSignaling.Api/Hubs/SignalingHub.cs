@@ -65,8 +65,35 @@ namespace StreamSignaling.Api.Hubs
                 return;
             }
 
-            // Suscribir al grupo por DeviceHardwareId
+            // Suscribir al grupo por DeviceHardwareId (compatibilidad)
             await Groups.AddToGroupAsync(Context.ConnectionId, hardwareId);
+
+            // Suscribir también al grupo por cada LinkedDevice.Id (GUID en minúsculas),
+            // que es el otro identificador que usa DevicesController.RequestStream.
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var devices = await db.LinkedDevices
+                    .AsNoTracking()
+                    .Select(d => new { d.Id, d.DeviceHardwareId })
+                    .ToListAsync();
+
+                foreach (var device in devices)
+                {
+                    if (!string.IsNullOrWhiteSpace(device.DeviceHardwareId) &&
+                        string.Equals(device.DeviceHardwareId.Trim(), hardwareId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        await Groups.AddToGroupAsync(
+                            Context.ConnectionId,
+                            device.Id.ToString().ToLowerInvariant());
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "No se pudieron suscribir los grupos por LinkedDevice.Id.");
+            }
 
             if (ConnectionDevices.TryGetValue(Context.ConnectionId, out var previous) &&
                 !string.Equals(previous, hardwareId, StringComparison.OrdinalIgnoreCase))
@@ -124,6 +151,8 @@ namespace StreamSignaling.Api.Hubs
             if (!string.IsNullOrEmpty(session.ReceptorConnectionId))
             {
                 await Clients.Client(Context.ConnectionId).SendAsync("ReceiverJoined", session.SessionCode);
+                await Clients.Client(Context.ConnectionId).SendAsync("OnPeerJoined", session.SessionCode);
+                await Clients.Client(Context.ConnectionId).SendAsync("PeerJoined", session.SessionCode);
             }
         }
 
@@ -153,6 +182,8 @@ namespace StreamSignaling.Api.Hubs
             if (session.EmisorActive && !string.IsNullOrEmpty(session.EmisorDeviceId))
             {
                 await Clients.Client(session.EmisorDeviceId).SendAsync("ReceiverJoined", session.SessionCode);
+                await Clients.Client(session.EmisorDeviceId).SendAsync("OnPeerJoined", session.SessionCode);
+                await Clients.Client(session.EmisorDeviceId).SendAsync("PeerJoined", session.SessionCode);
             }
         }
 
@@ -244,8 +275,15 @@ namespace StreamSignaling.Api.Hubs
                 return;
             }
 
-            await Clients.Client(session.EmisorDeviceId).SendAsync("OnSwitchCameraRequested");
-            await Clients.Client(session.ReceptorConnectionId).SendAsync("OnSwitchCameraRequested");
+            if (!string.IsNullOrEmpty(session.EmisorDeviceId))
+            {
+                await Clients.Client(session.EmisorDeviceId).SendAsync("OnSwitchCameraRequested");
+            }
+
+            if (!string.IsNullOrEmpty(session.ReceptorConnectionId))
+            {
+                await Clients.Client(session.ReceptorConnectionId).SendAsync("OnSwitchCameraRequested");
+            }
         }
 
         /// <summary>Solicita activar/desactivar el micrófono en la sesión.</summary>
@@ -257,8 +295,15 @@ namespace StreamSignaling.Api.Hubs
                 return;
             }
 
-            await Clients.Client(session.EmisorDeviceId).SendAsync("OnToggleMuteRequested", isMuted);
-            await Clients.Client(session.ReceptorConnectionId).SendAsync("OnToggleMuteRequested", isMuted);
+            if (!string.IsNullOrEmpty(session.EmisorDeviceId))
+            {
+                await Clients.Client(session.EmisorDeviceId).SendAsync("OnToggleMuteRequested", isMuted);
+            }
+
+            if (!string.IsNullOrEmpty(session.ReceptorConnectionId))
+            {
+                await Clients.Client(session.ReceptorConnectionId).SendAsync("OnToggleMuteRequested", isMuted);
+            }
         }
 
         public override async Task OnDisconnectedAsync(Exception? exception)

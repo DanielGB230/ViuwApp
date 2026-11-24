@@ -163,6 +163,7 @@ class AuthRepository(
             )
 
             val request = Request.Builder()
+                .addHeader("X-Tunnel-Skip-AntiPhishing-Page", "true")
                 .url("$baseUrl/api/devices/register")
                 .header("Authorization", "Bearer $token")
                 .post(json.toString().toRequestBody(JSON_MEDIA))
@@ -190,6 +191,7 @@ class AuthRepository(
         try {
             val token = getCurrentIdToken()
             val request = Request.Builder()
+                .addHeader("X-Tunnel-Skip-AntiPhishing-Page", "true")
                 .url("$baseUrl/api/devices/mine")
                 .header("Authorization", "Bearer $token")
                 .get()
@@ -233,6 +235,7 @@ class AuthRepository(
         try {
             val token = getCurrentIdToken()
             val request = Request.Builder()
+                .addHeader("X-Tunnel-Skip-AntiPhishing-Page", "true")
                 .url("$baseUrl/api/devices/$deviceId/request-stream")
                 .header("Authorization", "Bearer $token")
                 .post("{}".toRequestBody(JSON_MEDIA))
