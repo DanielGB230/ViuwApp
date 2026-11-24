@@ -133,9 +133,9 @@ class StreamingForegroundService : LifecycleService() {
                         listener = senderListener
                     )
                     webRtc = client
-                    // Fase 14: arranque con cámara trasera y micrófono activo.
-                    client.startLocalMedia(preferFrontCamera = false)
-                    client.setAudioEnabled(true)
+                    // Fase 15: se negocian transceptores SEND_ONLY sin abrir
+                    // cámara ni micrófono (sin punto verde de Android).
+                    client.createPeerConnection()
                 }
 
                 val client = signalR ?: SignalRClient().also { signalR = it }

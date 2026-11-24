@@ -15,19 +15,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -39,12 +41,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.streamapp.DeviceListItem
+import com.example.streamapp.ui.theme.Emerald
+import com.example.streamapp.ui.theme.Slate400
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -67,12 +70,21 @@ fun ReceiverDevicesScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Mis Dispositivos") },
+                title = {
+                    Column {
+                        Text("Mis Dispositivos", fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "${devices.count { it.isOnline }} en línea · ${devices.size} vinculados",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
                 actions = {
                     IconButton(onClick = onRefresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Actualizar")
                     }
-                    OutlinedButton(onClick = onSignOutClicked) {
+                    TextButton(onClick = onSignOutClicked) {
                         Text("Salir")
                     }
                 }
@@ -83,14 +95,8 @@ fun ReceiverDevicesScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp)
+                .padding(horizontal = 16.dp)
         ) {
-            Text(
-                text = "Dispositivos vinculados",
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold
-            )
-
             Spacer(Modifier.height(8.dp))
 
             if (errorMessage != null) {
@@ -118,71 +124,41 @@ fun ReceiverDevicesScreen(
                         .weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "No hay dispositivos supervisados registrados todavía.\nConfigura un teléfono en modo Emisor con tu misma cuenta.",
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 14.sp
-                    )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Videocam,
+                            contentDescription = null,
+                            tint = Slate400,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = "No hay dispositivos supervisados todavía.\nConfigura un teléfono en modo Emisor con tu misma cuenta.",
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 14.sp
+                        )
+                    }
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
                 ) {
                     items(devices, key = { it.id }) { device ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                val statusColor = if (device.isOnline) Color(0xFF4CAF50) else Color.Gray
-
-                                Box(
-                                    modifier = Modifier
-                                        .size(12.dp)
-                                        .then(Modifier.background(statusColor, CircleShape))
-                                )
-
-                                Spacer(Modifier.width(12.dp))
-
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = device.deviceName,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp
-                                    )
-                                    Text(
-                                        text = if (device.isOnline) "En línea" else "Desconectado",
-                                        fontSize = 12.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-
-                                Button(
-                                    onClick = {
-                                        // POST /api/devices/{deviceId}/request-stream
-                                        // y navegación a ReceiverScreen con el sessionId obtenido
-                                        onDeviceSelected(device.id)
-                                    },
-                                    enabled = !isLoading
-                                ) {
-                                    Text("Ver Cámara")
-                                }
-                            }
-                        }
+                        DeviceCard(
+                            device = device,
+                            enabled = !isLoading,
+                            onViewCamera = { onDeviceSelected(device.id) }
+                        )
                     }
                 }
             }
 
             Spacer(Modifier.height(8.dp))
 
-            // Sección secundaria y colapsable: conexión manual por código de sesión.
+            // Sección secundaria: conexión manual por código de sesión.
             TextButton(
                 onClick = { showManualCode = !showManualCode },
                 modifier = Modifier.fillMaxWidth()
@@ -193,11 +169,10 @@ fun ReceiverDevicesScreen(
             }
 
             if (showManualCode) {
-                Card(
+                Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
@@ -215,12 +190,14 @@ fun ReceiverDevicesScreen(
                                 onValueChange = { manualCode = it.uppercase().take(6) },
                                 placeholder = { Text("Código (ej. AB12CD)") },
                                 singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
                                 modifier = Modifier.weight(1f)
                             )
                             Spacer(Modifier.width(8.dp))
                             Button(
                                 onClick = { onManualCodeConnect(manualCode) },
-                                enabled = manualCode.length == 6
+                                enabled = manualCode.length == 6,
+                                shape = RoundedCornerShape(14.dp)
                             ) {
                                 Text("Unirse")
                             }
@@ -228,6 +205,110 @@ fun ReceiverDevicesScreen(
                     }
                 }
             }
+
+            Spacer(Modifier.height(12.dp))
         }
+    }
+}
+
+@Composable
+private fun DeviceCard(
+    device: DeviceListItem,
+    enabled: Boolean,
+    onViewCamera: () -> Unit
+) {
+    val statusColor = if (device.isOnline) Emerald else Slate400
+    val statusText = if (device.isOnline) "En línea" else "Desconectado"
+    val lastSeen = device.lastSeen?.takeIf { it.isNotBlank() }
+
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Videocam,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                Spacer(Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = device.deviceName,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        maxLines = 1
+                    )
+
+                    Spacer(Modifier.height(4.dp))
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .background(statusColor, CircleShape)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = statusText,
+                            fontSize = 12.sp,
+                            color = statusColor,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            Text(
+                text = if (lastSeen != null) {
+                    "Última conexión: ${formatLastSeen(lastSeen)}"
+                } else {
+                    "Sin conexiones registradas"
+                },
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            Button(
+                onClick = onViewCamera,
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Icon(Icons.Default.Videocam, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Ver Cámara")
+            }
+        }
+    }
+}
+
+/** Presenta el ISO-8601 del backend de forma legible y compacta. */
+private fun formatLastSeen(raw: String): String {
+    return try {
+        val datePart = raw.substringBefore('T')
+        val timePart = raw.substringAfter('T', "").take(5)
+        if (timePart.isNotBlank()) "$datePart · $timePart" else datePart
+    } catch (_: Throwable) {
+        raw
     }
 }

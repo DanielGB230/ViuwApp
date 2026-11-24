@@ -1,28 +1,48 @@
 package com.example.streamapp.ui.sender
 
+import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,6 +52,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -61,7 +82,14 @@ fun SenderStandbyScreen(
     var statusMessage by remember { mutableStateOf("Verificando permisos y registro...") }
     var retryTrigger by remember { mutableStateOf(0) }
     var streamHandlerRegistered by remember { mutableStateOf(false) }
+    var batteryOptimizationIgnored by remember { mutableStateOf(isBatteryOptimizationIgnored(context)) }
     val signalR = remember { SignalRClient() }
+
+    val batteryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        batteryOptimizationIgnored = isBatteryOptimizationIgnored(context)
+    }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -180,9 +208,9 @@ fun SenderStandbyScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Dispositivo Supervisado") },
+                title = { Text("ViuwApp") },
                 actions = {
-                    OutlinedButton(onClick = onSignOutClicked) {
+                    TextButton(onClick = onSignOutClicked) {
                         Text("Salir")
                     }
                 }
@@ -193,59 +221,192 @@ fun SenderStandbyScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(24.dp),
+                .padding(horizontal = 24.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (isRegistering) {
-                CircularProgressIndicator(modifier = Modifier.size(56.dp))
-            } else if (isRegistered) {
-                Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = "Activo",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(64.dp)
-                )
+            StatusIndicator(
+                isReady = isRegistered,
+                isWorking = isRegistering,
+                statusMessage = statusMessage
+            )
+
+            Spacer(Modifier.height(28.dp))
+
+            ElevatedCard(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.elevatedCardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = "Dispositivo Supervisado",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "La transmisión se activará automáticamente cuando el tutor la solicite. Este equipo permanece en espera sin usar cámara ni micrófono.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
 
-            Spacer(Modifier.height(24.dp))
-
-            Text(
-                text = "Modo Emisor Activo",
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Text(
-                text = statusMessage,
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(Modifier.height(36.dp))
-
-            Text(
-                text = "El stream comenzará automáticamente cuando el tutor inicie la transmisión.",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-
             if (!isRegistering && !isRegistered) {
-                Spacer(Modifier.height(24.dp))
-                Button(onClick = {
-                    isRegistered = false
-                    isRegistering = true
-                    statusMessage = "Reintentando registro..."
-                    retryTrigger++
-                }) {
+                Spacer(Modifier.height(20.dp))
+                Button(
+                    onClick = {
+                        isRegistered = false
+                        isRegistering = true
+                        statusMessage = "Reintentando registro..."
+                        retryTrigger++
+                    }
+                ) {
                     Text("Reintentar registro")
                 }
             }
+
+            if (!batteryOptimizationIgnored) {
+                Spacer(Modifier.height(20.dp))
+                BatteryOptimizationChip(
+                    onClick = {
+                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = android.net.Uri.parse("package:${context.packageName}")
+                        }
+                        try {
+                            batteryLauncher.launch(intent)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "No se pudo abrir optimización de batería: ${e.message}")
+                        }
+                    }
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun StatusIndicator(
+    isReady: Boolean,
+    isWorking: Boolean,
+    statusMessage: String
+) {
+    val transition = rememberInfiniteTransition(label = "pulse")
+    val pulse by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1100),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseAlpha"
+    )
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Surface(
+            modifier = Modifier.size(96.dp),
+            shape = CircleShape,
+            color = when {
+                isReady -> MaterialTheme.colorScheme.primaryContainer
+                isWorking -> MaterialTheme.colorScheme.surfaceVariant
+                else -> MaterialTheme.colorScheme.errorContainer
+            }
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                if (isWorking) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(40.dp),
+                        strokeWidth = 3.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (isReady) Icons.Default.CheckCircle else Icons.Default.ErrorOutline,
+                        contentDescription = null,
+                        tint = if (isReady) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onErrorContainer
+                        },
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .alpha(if (isWorking) pulse else 1f)
+                    .background(
+                        color = if (isReady) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                        shape = CircleShape
+                    )
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = when {
+                    isReady -> "En línea y listo"
+                    isWorking -> "Sincronizando"
+                    else -> "Sin conexión"
+                },
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Text(
+            text = statusMessage,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun BatteryOptimizationChip(onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        shape = RoundedCornerShape(50)
+    ) {
+        Icon(
+            imageVector = Icons.Default.BatteryAlert,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = "Desactivar optimización de batería",
+            fontSize = 12.sp
+        )
+    }
+}
+
+private fun isBatteryOptimizationIgnored(context: Context): Boolean {
+    return try {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+        pm.isIgnoringBatteryOptimizations(context.packageName)
+    } catch (t: Throwable) {
+        Log.w(TAG, "No se pudo consultar optimización de batería: ${t.message}")
+        true
     }
 }

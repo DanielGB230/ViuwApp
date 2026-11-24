@@ -13,13 +13,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -28,6 +32,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -186,11 +191,19 @@ fun ReceiverScreen(
                     )
                 }
             } else {
+                val isLive = state.cameraMode != "OFF"
+                val badgeText = when {
+                    isLive -> "EN VIVO"
+                    state.isMicEnabled -> "Solo audio activo"
+                    else -> "Conectado — Cámara y micrófono apagados"
+                }
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color.Black)
                 ) {
                     AndroidView(
                         modifier = Modifier.fillMaxSize(),
@@ -210,24 +223,70 @@ fun ReceiverScreen(
                         }
                     )
 
-                    if (state.cameraMode == "OFF") {
+                    // Badge superior de estado
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(12.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Color.Black.copy(alpha = 0.65f))
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Box(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color.Black.copy(alpha = 0.88f)),
-                            contentAlignment = Alignment.Center
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(if (isLive) Color(0xFF10B981) else Color(0xFF94A3B8))
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = badgeText,
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    if (!isLive && !state.isMicEnabled) {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
                         ) {
+                            Icon(
+                                imageVector = Icons.Default.VideocamOff,
+                                contentDescription = null,
+                                tint = Color(0xFFCBD5E1),
+                                modifier = Modifier.size(40.dp)
+                            )
+                            Spacer(Modifier.height(8.dp))
                             Text(
-                                text = "Cámara apagada — Solo audio",
-                                color = Color.White,
-                                style = MaterialTheme.typography.titleMedium,
+                                text = "Cámara y micrófono apagados",
+                                color = Color(0xFFCBD5E1),
+                                fontSize = 14.sp,
                                 textAlign = TextAlign.Center
                             )
+                            Spacer(Modifier.height(12.dp))
+                            Button(onClick = { viewModel.selectCameraMode("BACK") }) {
+                                Icon(Icons.Default.Videocam, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Activar Cámara")
+                            }
                         }
+                    } else if (!isLive) {
+                        Text(
+                            text = "Solo audio activo",
+                            modifier = Modifier.align(Alignment.Center),
+                            color = Color(0xFFCBD5E1),
+                            fontSize = 14.sp
+                        )
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                Text(state.status, style = MaterialTheme.typography.bodyMedium)
+
+                Spacer(Modifier.height(10.dp))
+                Text(state.status, style = MaterialTheme.typography.bodySmall)
                 state.error?.let { error ->
                     Text(
                         text = error,
@@ -235,70 +294,87 @@ fun ReceiverScreen(
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
 
-                // Controles independientes del Emisor (Fase 14)
-                Row(
+                // Panel inferior: fila 1 cámara; fila 2 audio y salida.
+                Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    tonalElevation = 2.dp
                 ) {
-                    CameraModeButton(
-                        label = "Cámara Trasera",
-                        selected = state.cameraMode == "BACK",
-                        onClick = { viewModel.selectCameraMode("BACK") },
-                        modifier = Modifier.weight(1f)
-                    )
-                    CameraModeButton(
-                        label = "Cámara Frontal",
-                        selected = state.cameraMode == "FRONT",
-                        onClick = { viewModel.selectCameraMode("FRONT") },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = "CÁMARA",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(6.dp))
 
-                Spacer(Modifier.height(8.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    CameraModeButton(
-                        label = "Apagar Cámara",
-                        selected = state.cameraMode == "OFF",
-                        onClick = { viewModel.selectCameraMode("OFF") },
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    if (state.isMicEnabled) {
-                        OutlinedButton(
-                            onClick = { viewModel.toggleMicrophone() },
-                            modifier = Modifier.weight(1f)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Default.Mic, contentDescription = "Micrófono activo")
-                            Spacer(Modifier.width(4.dp))
-                            Text("Desactivar Micrófono", fontSize = 12.sp, maxLines = 1)
+                            CameraModeButton(
+                                label = "Trasera",
+                                selected = state.cameraMode == "BACK",
+                                onClick = { viewModel.selectCameraMode("BACK") },
+                                modifier = Modifier.weight(1f)
+                            )
+                            CameraModeButton(
+                                label = "Frontal",
+                                selected = state.cameraMode == "FRONT",
+                                onClick = { viewModel.selectCameraMode("FRONT") },
+                                modifier = Modifier.weight(1f)
+                            )
+                            CameraModeButton(
+                                label = "Apagar",
+                                selected = state.cameraMode == "OFF",
+                                onClick = { viewModel.selectCameraMode("OFF") },
+                                modifier = Modifier.weight(1f)
+                            )
                         }
-                    } else {
-                        Button(
-                            onClick = { viewModel.toggleMicrophone() },
-                            modifier = Modifier.weight(1f)
+
+                        Spacer(Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(Icons.Default.MicOff, contentDescription = "Micrófono desactivado")
-                            Spacer(Modifier.width(4.dp))
-                            Text("Activar Micrófono", fontSize = 12.sp, maxLines = 1)
+                            if (state.isMicEnabled) {
+                                OutlinedButton(
+                                    onClick = { viewModel.toggleMicrophone() },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.Mic, contentDescription = null)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Desactivar Micrófono", fontSize = 12.sp, maxLines = 1)
+                                }
+                            } else {
+                                Button(
+                                    onClick = { viewModel.toggleMicrophone() },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.MicOff, contentDescription = null)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Activar Micrófono", fontSize = 12.sp, maxLines = 1)
+                                }
+                            }
+
+                            OutlinedButton(
+                                onClick = leaveScreen,
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) {
+                                Icon(Icons.Default.CallEnd, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Desconectar", fontSize = 12.sp, maxLines = 1)
+                            }
                         }
                     }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                Button(
-                    onClick = leaveScreen,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.CallEnd, contentDescription = "Desconectar")
-                    Spacer(Modifier.width(6.dp))
-                    Text("Desconectar")
                 }
             }
         }

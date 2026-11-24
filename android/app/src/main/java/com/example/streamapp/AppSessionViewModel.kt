@@ -26,7 +26,6 @@ sealed interface AppUiState {
     object RoleSetup : AppUiState
     object SenderStandby : AppUiState
     object ReceiverDevices : AppUiState
-    data class ActiveSender(val sessionCode: String = "") : AppUiState
     data class ActiveReceiver(val sessionCode: String) : AppUiState
 }
 
@@ -192,11 +191,6 @@ class AppSessionViewModel(
                 _devicesError.value = "No se pudo iniciar la transmisión con el dispositivo."
             }
         }
-    }
-
-    fun startManualTransmission() {
-        _activeStreamMode.value = AppUiState.ActiveSender()
-        _uiState.value = AppUiState.ActiveSender()
     }
 
     /** Conexión manual del Receptor mediante un código de sesión de 6 caracteres. */

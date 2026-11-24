@@ -23,8 +23,8 @@ data class ReceiverUiState(
     val status: String = "Ingresa el código de 6 caracteres",
     val isConnecting: Boolean = false,
     val isConnected: Boolean = false,
-    val cameraMode: String = "BACK",
-    val isMicEnabled: Boolean = true,
+    val cameraMode: String = "OFF",
+    val isMicEnabled: Boolean = false,
     val error: String? = null
 )
 
@@ -60,8 +60,8 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                 sessionCode = code,
                 status = "Conectando al servidor...",
                 isConnecting = true,
-                cameraMode = "BACK",
-                isMicEnabled = true,
+                cameraMode = "OFF",
+                isMicEnabled = false,
                 error = null
             )
         }
