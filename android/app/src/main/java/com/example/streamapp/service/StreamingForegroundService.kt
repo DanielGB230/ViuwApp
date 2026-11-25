@@ -42,6 +42,8 @@ class StreamingForegroundService : LifecycleService() {
 
     companion object {
         private const val TAG = "StreamingFGS"
+        // Etiquetas de log unificadas para diagnóstico de flujo (Fase 19)
+        private const val LOG_TAG = "ViuwStream"
 
         const val ACTION_START = "com.example.streamapp.action.START_STREAM"
         const val ACTION_STOP = "com.example.streamapp.action.STOP_STREAM"
@@ -83,13 +85,13 @@ class StreamingForegroundService : LifecycleService() {
 
         when (intent?.action) {
             ACTION_STOP -> {
-                Log.d(TAG, "ACTION_STOP recibida")
+                Log.i(LOG_TAG, "onStartCommand: ACTION_STOP")
                 stopStreamingAndSelf()
                 return START_NOT_STICKY
             }
 
             ACTION_STANDBY -> {
-                Log.d(TAG, "ACTION_STANDBY recibida (solo presencia, sin hardware)")
+                Log.i(LOG_TAG, "onStartCommand: ACTION_STANDBY (solo presencia)")
                 enterStandbyMode()
             }
 
@@ -98,7 +100,7 @@ class StreamingForegroundService : LifecycleService() {
                 val sessionCode = intent.getStringExtra(EXTRA_SESSION_CODE)
                     .orEmpty()
                     .ifBlank { intent.getStringExtra(EXTRA_SESSION_ID).orEmpty() }
-                Log.d(TAG, "ACTION_START recibida (sessionCode=$sessionCode)")
+                Log.i(LOG_TAG, "onStartCommand: ACTION_START sessionCode=$sessionCode")
                 standbyMode = false
                 // El foreground debe declararse cuanto antes (límite de 5 s).
                 startAsForeground()
@@ -121,7 +123,7 @@ class StreamingForegroundService : LifecycleService() {
         }
 
         if (streamingStarted) {
-            Log.d(TAG, "Streaming ya iniciado; se ignora ACTION_START duplicada")
+            Log.d(LOG_TAG, "startStreaming: ya iniciado, ignorando duplicado")
             return
         }
         streamingStarted = true
@@ -144,11 +146,20 @@ class StreamingForegroundService : LifecycleService() {
                     // Fase 15: se negocian transceptores SEND_ONLY sin abrir
                     // cámara ni micrófono (sin punto verde de Android).
                     client.createPeerConnection()
+                    Log.i(LOG_TAG, "startStreaming: WebRtcClient creado y PeerConnection negociada (cámara/mic OFF)")
                 }
 
                 val client = signalR ?: SignalRClient().also { signalR = it }
-                client.connect()
-                registerSignalRHandlers(client)
+                // Esperar a que SignalR esté CONNECTED antes de joinSession/createSession.
+                if (!client.isConnected) {
+                    Log.i(LOG_TAG, "startStreaming: conectando SignalR...")
+                    client.connect()
+                    registerSignalRHandlers(client)
+                    Log.i(LOG_TAG, "startStreaming: SignalR CONNECTED")
+                } else {
+                    // Ya estaba conectado (venimos de standby): asegurar handlers.
+                    registerSignalRHandlers(client)
+                }
 
                 val hardwareId = Settings.Secure.getString(
                     contentResolver,
@@ -158,15 +169,15 @@ class StreamingForegroundService : LifecycleService() {
                 if (pendingSessionCode.isNotBlank() && hardwareId.isNotBlank()) {
                     // FCM despertó al dispositivo: la sesión ya existe en el servidor.
                     // Unirse directamente en lugar de crear una nueva.
-                    Log.d(TAG, "SignalR conectado. JoinSession($pendingSessionCode)")
+                    Log.i(LOG_TAG, "startStreaming: JoinSession($pendingSessionCode, $hardwareId)")
                     client.joinSession(pendingSessionCode, hardwareId)
                 } else {
                     // Flujo legacy: crear sesión nueva.
-                    Log.d(TAG, "SignalR conectado. CreateSession($pendingSessionCode)")
+                    Log.i(LOG_TAG, "startStreaming: CreateSession($pendingSessionCode)")
                     client.createSession(pendingSessionCode)
                 }
             } catch (t: Throwable) {
-                Log.e(TAG, "No se pudo iniciar el streaming", t)
+                Log.e(LOG_TAG, "No se pudo iniciar el streaming", t)
                 stopStreamingAndSelf()
             }
         }
@@ -237,28 +248,33 @@ class StreamingForegroundService : LifecycleService() {
      */
     private fun startStandbyPresence() {
         if (presenceStarted) {
-            Log.d(TAG, "Presencia ya iniciada; se ignora solicitud duplicada")
+            Log.d(LOG_TAG, "Presencia ya iniciada; se ignora solicitud duplicada")
             return
         }
         presenceStarted = true
 
         serviceScope.launch {
             try {
-                val client = ensureSignalRReady()
-                registerPresence(client)
+                ensureSignalRReady() // ya registra presencia internamente
+                Log.i(LOG_TAG, "startStandbyPresence: presencia registrada")
             } catch (t: Throwable) {
-                Log.e(TAG, "No se pudo iniciar la presencia en standby", t)
+                Log.e(LOG_TAG, "No se pudo iniciar la presencia en standby", t)
                 presenceStarted = false
                 stopStreamingAndSelf()
             }
         }
     }
 
-    /** Conecta SignalR (si hace falta) y registra los handlers una sola vez. */
+    /** Conecta SignalR (si hace falta), registra handlers y presencia. */
     private suspend fun ensureSignalRReady(): SignalRClient {
         val client = signalR ?: SignalRClient().also { signalR = it }
-        client.connect()
+        if (!client.isConnected) {
+            client.connect()
+        }
         registerSignalRHandlers(client)
+        // RegisterDevicePresence suscribe el ConnectionId a los grupos por DeviceHardwareId
+        // y LinkedDevice.Id en SignalingHub (clave para recibir StartStream).
+        registerPresence(client)
         return client
     }
 
@@ -283,24 +299,25 @@ class StreamingForegroundService : LifecycleService() {
 
         client.onSessionCreated { code ->
             sessionCode = code
-            Log.d(TAG, "SessionCreated: $code (esperando OnPeerJoined para ofertar)")
+            Log.i(LOG_TAG, "SessionCreated: $code (esperando OnPeerJoined para ofertar)")
         }
 
         // Ambos eventos llegan cuando el Receptor entra en la sala.
         client.onPeerJoined { code ->
             if (code.isNotBlank()) sessionCode = code
-            Log.d(TAG, "PeerJoined: $code -> enviando oferta SDP")
+            Log.i(LOG_TAG, "PeerJoined: $code -> enviando oferta SDP")
             sendOfferIfPossible()
         }
 
         client.onReceiverJoined { code ->
             if (code.isNotBlank()) sessionCode = code
+            Log.i(LOG_TAG, "ReceiverJoined: $code -> enviando oferta SDP")
             sendOfferIfPossible()
         }
 
         client.onAnswerReceived { sdp ->
             webRtc?.setRemoteDescription(sdp, SessionDescription.Type.ANSWER) {
-                Log.d(TAG, "Respuesta SDP remota aplicada")
+                Log.i(LOG_TAG, "Respuesta SDP remota aplicada")
             }
         }
 
@@ -309,51 +326,68 @@ class StreamingForegroundService : LifecycleService() {
         }
 
         client.onReceiverLeft {
-            Log.d(TAG, "El Receptor se desconectó; se podrá reofertar")
+            Log.i(LOG_TAG, "El Receptor se desconectó; se podrá reofertar")
             offerSent = false
         }
 
         client.onSessionEnded { message ->
-            Log.d(TAG, "SessionEnded: $message")
+            Log.i(LOG_TAG, "SessionEnded: $message")
             stopStreamingAndSelf()
         }
 
         client.onSessionError { message ->
-            Log.e(TAG, "SessionError: $message")
+            Log.e(LOG_TAG, "SessionError: $message")
         }
 
         // ---- Arranque de streaming (desde standby o FCM) ----
         client.onStartStream { sessionId ->
-            Log.d(TAG, "StartStream recibido: sessionId=$sessionId")
-            startStreaming(sessionId)
+            Log.i(LOG_TAG, "onStartStream recibido: sessionId=$sessionId (SignalR connected=${signalR?.isConnected})")
+            // Asegurar que el PeerConnection exista (cámara/mic OFF) antes de que el receptor envíe offer.
+            serviceScope.launch {
+                try {
+                    if (webRtc == null) {
+                        val client = WebRtcClient(
+                            context = applicationContext,
+                            isSender = true,
+                            listener = senderListener
+                        )
+                        webRtc = client
+                        client.createPeerConnection()
+                        Log.i(LOG_TAG, "onStartStream: WebRtcClient creado bajo demanda (cámara/mic OFF)")
+                    }
+                    startStreaming(sessionId)
+                } catch (t: Throwable) {
+                    Log.e(LOG_TAG, "onStartStream: error preparando WebRTC", t)
+                }
+            }
         }
 
         // ---- Controles remotos desde el Receptor ----
         client.onSwitchCameraRequested {
-            Log.d(TAG, "OnSwitchCameraRequested -> switchCamera()")
+            Log.i(LOG_TAG, "OnSwitchCameraRequested -> switchCamera()")
             webRtc?.switchCamera()
         }
 
         client.onToggleMuteRequested { isMuted ->
-            Log.d(TAG, "OnToggleMuteRequested -> setAudioEnabled(${!isMuted})")
+            Log.i(LOG_TAG, "OnToggleMuteRequested -> setAudioEnabled(${!isMuted})")
             webRtc?.setAudioEnabled(!isMuted)
         }
 
         // Fase 14: controles independientes de cámara y micrófono.
         client.onCameraModeChanged { mode ->
-            Log.d(TAG, "OnCameraModeChanged -> setCameraMode($mode)")
+            Log.i(LOG_TAG, "OnCameraModeChanged -> setCameraMode($mode)")
             webRtc?.setCameraMode(mode)
         }
 
         client.onMicrophoneEnabledChanged { enabled ->
-            Log.d(TAG, "OnMicrophoneEnabledChanged -> setAudioEnabled($enabled)")
+            Log.i(LOG_TAG, "OnMicrophoneEnabledChanged -> setAudioEnabled($enabled)")
             webRtc?.setAudioEnabled(enabled)
         }
 
         // El Receptor pidió desconectar: liberar hardware y volver a standby
         // sin cerrar SignalR ni la sesión.
         client.onStreamStopped {
-            Log.d(TAG, "OnStreamStopped -> liberando WebRTC y volviendo a standby")
+            Log.i(LOG_TAG, "OnStreamStopped -> liberando WebRTC y volviendo a standby")
             returnToStandby()
         }
     }
@@ -367,7 +401,7 @@ class StreamingForegroundService : LifecycleService() {
             try {
                 webRtc?.close()
             } catch (t: Throwable) {
-                Log.w(TAG, "Error cerrando WebRTC al volver a standby: ${t.message}")
+                Log.w(LOG_TAG, "Error cerrando WebRTC al volver a standby: ${t.message}")
             }
             webRtc = null
         }
@@ -382,8 +416,8 @@ class StreamingForegroundService : LifecycleService() {
 
         serviceScope.launch {
             try {
-                val client = ensureSignalRReady()
-                registerPresence(client)
+                ensureSignalRReady() // ya registra presencia internamente
+                Log.i(LOG_TAG, "returnToStandby: presencia registrada")
             } catch (t: Throwable) {
                 Log.e(TAG, "No se pudo mantener la presencia tras OnStreamStopped", t)
             }
@@ -478,9 +512,14 @@ class StreamingForegroundService : LifecycleService() {
     private fun startAsForeground(standby: Boolean = false) {
         val types = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             when {
-                !standby -> ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
+                !standby -> {
+                    // Streaming activo: cámara + micrófono
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-                // El tipo specialUse solo existe a partir de Android 14 (API 34).
+                }
+                // Standby: cámara y micrófono APAGADOS.
+                // En Android 14+ (API 34) usamos SPECIAL_USE (parental_control_presence).
+                // En Android 10-13 usamos DATA_SYNC como fallback.
                 Build.VERSION.SDK_INT >= 34 -> ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
                 else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             }
@@ -490,9 +529,10 @@ class StreamingForegroundService : LifecycleService() {
 
         try {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(standby), types)
+            Log.d(LOG_TAG, "startAsForeground: standby=$standby, types=$types")
         } catch (t: Throwable) {
             // Si el sistema rechaza el FGS (p. ej. permisos revocados), detenemos el servicio.
-            Log.e(TAG, "No se pudo iniciar el foreground service", t)
+            Log.e(LOG_TAG, "No se pudo iniciar el foreground service", t)
             stopSelf()
         }
     }

@@ -147,7 +147,7 @@ class ReceiverViewModel(application: Application) : AndroidViewModel(application
                 _uiState.update {
                     if (it.isWaitingForEmitter) {
                         it.copy(
-                            status = "El dispositivo está sin conexión a Internet en este momento",
+                            status = "El dispositivo no respondió a tiempo. Verifica que tenga permisos en segundo plano.",
                             isWaitingForEmitter = false,
                             emitterTimeout = true
                         )
