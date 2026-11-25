@@ -16,24 +16,18 @@ import androidx.core.app.ServiceCompat
 import androidx.lifecycle.LifecycleService
 import com.example.streamapp.MainActivity
 import com.example.streamapp.data.SessionPreferences
-import com.example.streamapp.network.SignalRClient
-import com.example.streamapp.webrtc.WebRtcClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import org.webrtc.IceCandidate
-import org.webrtc.SessionDescription
-import org.webrtc.VideoTrack
 
 /**
  * Servicio en primer plano que mantiene viva la transmisión del Emisor:
- *  - Publica la notificación persistente con tipos cámara|micrófono.
- *  - Crea el WebRtcClient (cámara + micrófono) y la PeerConnection.
- *  - Se conecta al Hub /signaling, llama a CreateSession(sessionId) y envía la
- *    oferta SDP en cuanto hay un Receptor en la sala.
- *  - Atiende los controles remotos (cambiar cámara y silenciar micrófono).
+ *  - Publica la notificación persistente.
+ *  - Delegua la sesión WebRTC/SignalR a StreamSessionCoordinator.
+ *  - Gestiona el tipo de ForegroundService: SPECIAL_USE en standby (cámara/mic OFF),
+ *    promueve a CAMERA|MICROPHONE solo cuando se activan realmente.
  *
  * Debe iniciarse únicamente después de conceder CAMERA y RECORD_AUDIO
  * (los permisos se solicitan desde la Activity, nunca desde el servicio).
@@ -42,7 +36,7 @@ class StreamingForegroundService : LifecycleService() {
 
     companion object {
         private const val TAG = "StreamingFGS"
-        // Etiquetas de log unificadas para diagnóstico de flujo (Fase 19)
+        // Etiquetas de log unificadas para diagnóstico de flujo (Fase 19/20)
         private const val LOG_TAG = "ViuwStream"
 
         const val ACTION_START = "com.example.streamapp.action.START_STREAM"
@@ -63,16 +57,10 @@ class StreamingForegroundService : LifecycleService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    private var signalR: SignalRClient? = null
-    private var webRtc: WebRtcClient? = null
+    // Coordinador de sesión (singleton compartido con StandbySignalR/FCM fallback)
+    private val sessionCoordinator = StreamSessionCoordinatorProvider.get(this)
 
-    private var pendingSessionCode: String = ""
-    private var sessionCode: String = ""
-    private var streamingStarted = false
-    private var offerSent = false
-    private var presenceStarted = false
     private var standbyMode = false
-    private var handlersRegistered = false
 
     override fun onCreate() {
         super.onCreate()
@@ -104,7 +92,7 @@ class StreamingForegroundService : LifecycleService() {
                 standbyMode = false
                 // El foreground debe declararse cuanto antes (límite de 5 s).
                 startAsForeground()
-                startStreaming(sessionCode)
+                startSession(sessionCode)
             }
 
             else -> startAsForeground()
@@ -114,98 +102,33 @@ class StreamingForegroundService : LifecycleService() {
     }
 
     // ---------------------------------------------------------------------
-    // Streaming
+    // Gestión de sesión delegada al coordinador
     // ---------------------------------------------------------------------
 
-    private fun startStreaming(sessionCode: String) {
-        if (sessionCode.isNotBlank()) {
-            pendingSessionCode = sessionCode
+    private fun startSession(sessionCode: String) {
+        if (sessionCode.isBlank()) {
+            Log.w(LOG_TAG, "startSession: sessionCode vacío, creando sesión nueva")
+            // Sin sessionCode: el coordinador hará createSession internamente
         }
-
-        if (streamingStarted) {
-            Log.d(LOG_TAG, "startStreaming: ya iniciado, ignorando duplicado")
-            return
-        }
-        streamingStarted = true
-
-        // Si venimos de standby, cambiamos el tipo de foreground a cámara|micrófono.
+        // Si venimos de standby, actualizar tipo de foreground
         if (standbyMode) {
             standbyMode = false
             startAsForeground()
         }
-
-        serviceScope.launch {
-            try {
-                if (webRtc == null) {
-                    val client = WebRtcClient(
-                        context = applicationContext,
-                        isSender = true,
-                        listener = senderListener
-                    )
-                    webRtc = client
-                    // Fase 15: se negocian transceptores SEND_ONLY sin abrir
-                    // cámara ni micrófono (sin punto verde de Android).
-                    client.createPeerConnection()
-                    Log.i(LOG_TAG, "startStreaming: WebRtcClient creado y PeerConnection negociada (cámara/mic OFF)")
-                }
-
-                val client = signalR ?: SignalRClient().also { signalR = it }
-                // Esperar a que SignalR esté CONNECTED antes de joinSession/createSession.
-                if (!client.isConnected) {
-                    Log.i(LOG_TAG, "startStreaming: conectando SignalR...")
-                    client.connect()
-                    registerSignalRHandlers(client)
-                    Log.i(LOG_TAG, "startStreaming: SignalR CONNECTED")
-                } else {
-                    // Ya estaba conectado (venimos de standby): asegurar handlers.
-                    registerSignalRHandlers(client)
-                }
-
-                val hardwareId = Settings.Secure.getString(
-                    contentResolver,
-                    Settings.Secure.ANDROID_ID
-                ).orEmpty()
-
-                if (pendingSessionCode.isNotBlank() && hardwareId.isNotBlank()) {
-                    // FCM despertó al dispositivo: la sesión ya existe en el servidor.
-                    // Unirse directamente en lugar de crear una nueva.
-                    Log.i(LOG_TAG, "startStreaming: JoinSession($pendingSessionCode, $hardwareId)")
-                    client.joinSession(pendingSessionCode, hardwareId)
-                } else {
-                    // Flujo legacy: crear sesión nueva.
-                    Log.i(LOG_TAG, "startStreaming: CreateSession($pendingSessionCode)")
-                    client.createSession(pendingSessionCode)
-                }
-            } catch (t: Throwable) {
-                Log.e(LOG_TAG, "No se pudo iniciar el streaming", t)
-                stopStreamingAndSelf()
-            }
-        }
+        sessionCoordinator.startSession(sessionCode)
     }
 
     /**
-     * Entra en standby: garantiza que NO quede WebRtcClient, cámara ni micrófono
-     * activos, mantiene SignalR conectado y la presencia del dispositivo.
+     * Entra en standby: libera WebRTC, mantiene SignalR conectado y la presencia del dispositivo.
      */
     private fun enterStandbyMode() {
         standbyMode = true
 
-        if (webRtc != null) {
-            try {
-                webRtc?.close()
-            } catch (t: Throwable) {
-                Log.w(TAG, "Error cerrando WebRTC al entrar en standby: ${t.message}")
-            }
-            webRtc = null
-        }
-
-        sessionCode = ""
-        pendingSessionCode = ""
-        streamingStarted = false
-        offerSent = false
+        sessionCoordinator.stopSession()
 
         startAsForeground(standby = true)
-        startStandbyPresence()
+        // La presencia ya la gestiona el coordinador internamente (SignalR sigue vivo)
+        Log.i(LOG_TAG, "enterStandbyMode: WebRTC liberado, SignalR en presencia")
     }
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -213,8 +136,11 @@ class StreamingForegroundService : LifecycleService() {
             Log.d(TAG, "Red disponible -> reconectando SignalR y presencia")
             serviceScope.launch {
                 try {
-                    val client = ensureSignalRReady()
-                    registerPresence(client)
+                    // Asegurar que el coordinador tiene SignalR conectado y presencia registrada
+                    if (!sessionCoordinator.isActive()) {
+                        // Si no hay sesión activa, el coordinador ya mantiene SignalR para presencia
+                        Log.d(LOG_TAG, "NetworkCallback: SignalR ya mantenido por coordinador")
+                    }
                 } catch (t: Throwable) {
                     Log.w(TAG, "No se pudo reconectar tras red disponible: ${t.message}")
                 }
@@ -242,273 +168,21 @@ class StreamingForegroundService : LifecycleService() {
         }
     }
 
-    /**
-     * Modo standby (arranque tras reinicio): conecta SignalR y registra la
-     * presencia del dispositivo, sin abrir cámara ni micrófono.
-     */
-    private fun startStandbyPresence() {
-        if (presenceStarted) {
-            Log.d(LOG_TAG, "Presencia ya iniciada; se ignora solicitud duplicada")
-            return
-        }
-        presenceStarted = true
-
-        serviceScope.launch {
-            try {
-                ensureSignalRReady() // ya registra presencia internamente
-                Log.i(LOG_TAG, "startStandbyPresence: presencia registrada")
-            } catch (t: Throwable) {
-                Log.e(LOG_TAG, "No se pudo iniciar la presencia en standby", t)
-                presenceStarted = false
-                stopStreamingAndSelf()
-            }
-        }
-    }
-
-    /** Conecta SignalR (si hace falta), registra handlers y presencia. */
-    private suspend fun ensureSignalRReady(): SignalRClient {
-        val client = signalR ?: SignalRClient().also { signalR = it }
-        if (!client.isConnected) {
-            client.connect()
-        }
-        registerSignalRHandlers(client)
-        // RegisterDevicePresence suscribe el ConnectionId a los grupos por DeviceHardwareId
-        // y LinkedDevice.Id en SignalingHub (clave para recibir StartStream).
-        registerPresence(client)
-        return client
-    }
-
-    /** Actualiza la presencia del dispositivo en el backend. */
-    private fun registerPresence(client: SignalRClient) {
-        val hardwareId = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ANDROID_ID
-        ).orEmpty()
-
-        if (hardwareId.isNotBlank()) {
-            client.registerDevicePresence(hardwareId)
-            Log.d(TAG, "Presencia registrada para $hardwareId")
-        } else {
-            Log.w(TAG, "ANDROID_ID vacío; no se pudo registrar presencia")
-        }
-    }
-
-    private fun registerSignalRHandlers(client: SignalRClient) {
-        if (handlersRegistered) return
-        handlersRegistered = true
-
-        client.onSessionCreated { code ->
-            sessionCode = code
-            Log.i(LOG_TAG, "SessionCreated: $code (esperando OnPeerJoined para ofertar)")
-        }
-
-        // Ambos eventos llegan cuando el Receptor entra en la sala.
-        client.onPeerJoined { code ->
-            if (code.isNotBlank()) sessionCode = code
-            Log.i(LOG_TAG, "PeerJoined: $code -> enviando oferta SDP")
-            sendOfferIfPossible()
-        }
-
-        client.onReceiverJoined { code ->
-            if (code.isNotBlank()) sessionCode = code
-            Log.i(LOG_TAG, "ReceiverJoined: $code -> enviando oferta SDP")
-            sendOfferIfPossible()
-        }
-
-        client.onAnswerReceived { sdp ->
-            webRtc?.setRemoteDescription(sdp, SessionDescription.Type.ANSWER) {
-                Log.i(LOG_TAG, "Respuesta SDP remota aplicada")
-            }
-        }
-
-        client.onIceCandidate { candidate, sdpMid, sdpMLineIndex ->
-            webRtc?.addRemoteIceCandidate(IceCandidate(sdpMid, sdpMLineIndex, candidate))
-        }
-
-        client.onReceiverLeft {
-            Log.i(LOG_TAG, "El Receptor se desconectó; se podrá reofertar")
-            offerSent = false
-        }
-
-        client.onSessionEnded { message ->
-            Log.i(LOG_TAG, "SessionEnded: $message")
-            stopStreamingAndSelf()
-        }
-
-        client.onSessionError { message ->
-            Log.e(LOG_TAG, "SessionError: $message")
-        }
-
-        // ---- Arranque de streaming (desde standby o FCM) ----
-        client.onStartStream { sessionId ->
-            Log.i(LOG_TAG, "onStartStream recibido: sessionId=$sessionId (SignalR connected=${signalR?.isConnected})")
-            // Asegurar que el PeerConnection exista (cámara/mic OFF) antes de que el receptor envíe offer.
-            serviceScope.launch {
-                try {
-                    if (webRtc == null) {
-                        val client = WebRtcClient(
-                            context = applicationContext,
-                            isSender = true,
-                            listener = senderListener
-                        )
-                        webRtc = client
-                        client.createPeerConnection()
-                        Log.i(LOG_TAG, "onStartStream: WebRtcClient creado bajo demanda (cámara/mic OFF)")
-                    }
-                    startStreaming(sessionId)
-                } catch (t: Throwable) {
-                    Log.e(LOG_TAG, "onStartStream: error preparando WebRTC", t)
-                }
-            }
-        }
-
-        // ---- Controles remotos desde el Receptor ----
-        client.onSwitchCameraRequested {
-            Log.i(LOG_TAG, "OnSwitchCameraRequested -> switchCamera()")
-            webRtc?.switchCamera()
-        }
-
-        client.onToggleMuteRequested { isMuted ->
-            Log.i(LOG_TAG, "OnToggleMuteRequested -> setAudioEnabled(${!isMuted})")
-            webRtc?.setAudioEnabled(!isMuted)
-        }
-
-        // Fase 14: controles independientes de cámara y micrófono.
-        client.onCameraModeChanged { mode ->
-            Log.i(LOG_TAG, "OnCameraModeChanged -> setCameraMode($mode)")
-            webRtc?.setCameraMode(mode)
-        }
-
-        client.onMicrophoneEnabledChanged { enabled ->
-            Log.i(LOG_TAG, "OnMicrophoneEnabledChanged -> setAudioEnabled($enabled)")
-            webRtc?.setAudioEnabled(enabled)
-        }
-
-        // El Receptor pidió desconectar: liberar hardware y volver a standby
-        // sin cerrar SignalR ni la sesión.
-        client.onStreamStopped {
-            Log.i(LOG_TAG, "OnStreamStopped -> liberando WebRTC y volviendo a standby")
-            returnToStandby()
-        }
-    }
-
-    /**
-     * Libera cámara/micrófono/PeerConnection y regresa al modo standby,
-     * manteniendo SignalR y la presencia activos.
-     */
-    private fun returnToStandby() {
-        if (webRtc != null) {
-            try {
-                webRtc?.close()
-            } catch (t: Throwable) {
-                Log.w(LOG_TAG, "Error cerrando WebRTC al volver a standby: ${t.message}")
-            }
-            webRtc = null
-        }
-
-        sessionCode = ""
-        pendingSessionCode = ""
-        streamingStarted = false
-        offerSent = false
-        standbyMode = true
-
-        startAsForeground(standby = true)
-
-        serviceScope.launch {
-            try {
-                ensureSignalRReady() // ya registra presencia internamente
-                Log.i(LOG_TAG, "returnToStandby: presencia registrada")
-            } catch (t: Throwable) {
-                Log.e(TAG, "No se pudo mantener la presencia tras OnStreamStopped", t)
-            }
-        }
-    }
-
-    /** Crea la PeerConnection (una sola vez) y envía la oferta SDP. */
-    private fun sendOfferIfPossible() {
-        if (offerSent) return
-        if (sessionCode.isBlank()) {
-            Log.w(TAG, "Aún no hay sessionCode; no se puede ofertar")
-            return
-        }
-
-        val client = webRtc ?: run {
-            Log.w(TAG, "No hay WebRtcClient para ofertar")
-            return
-        }
-
-        try {
-            client.createPeerConnection()
-            client.createOffer { sdp ->
-                offerSent = true
-                signalR?.sendOffer(sessionCode, sdp)
-                Log.d(TAG, "Oferta SDP enviada para la sesión $sessionCode")
-            }
-        } catch (t: Throwable) {
-            Log.e(TAG, "No se pudo crear/enviar la oferta SDP", t)
-        }
-    }
-
-    private val senderListener = object : WebRtcClient.Listener {
-        override fun onIceCandidate(candidate: IceCandidate) {
-            val code = sessionCode.ifBlank { pendingSessionCode }
-            if (code.isNotBlank()) {
-                signalR?.sendIceCandidate(
-                    code,
-                    candidate.sdp,
-                    candidate.sdpMid ?: "",
-                    candidate.sdpMLineIndex
-                )
-            }
-        }
-
-        override fun onRemoteVideoTrack(track: VideoTrack) {
-            // El Emisor no recibe vídeo.
-        }
-
-        override fun onConnectionState(state: String) {
-            Log.d(TAG, "WebRTC connectionState=$state")
-        }
-
-        override fun onError(message: String) {
-            Log.e(TAG, "WebRTC error: $message")
-        }
-    }
-
     private fun stopStreamingAndSelf() {
-        cleanupStreaming()
+        sessionCoordinator.close()
         stopForegroundNow()
         stopSelf()
-    }
-
-    private fun cleanupStreaming() {
-        val client = signalR
-        signalR = null
-
-        // Al cerrar la conexión, el Hub dispara OnDisconnectedAsync y notifica
-        // al Receptor (SessionEnded), así que no hace falta esperar un ack.
-        try {
-            client?.closeConnection()
-        } catch (_: Throwable) {
-        }
-
-        try {
-            webRtc?.close()
-        } catch (t: Throwable) {
-            Log.w(TAG, "Error cerrando WebRTC: ${t.message}")
-        }
-        webRtc = null
-
-        sessionCode = ""
-        pendingSessionCode = ""
-        streamingStarted = false
-        offerSent = false
     }
 
     // ---------------------------------------------------------------------
     // Foreground service / notificación
     // ---------------------------------------------------------------------
 
+    /**
+     * Inicia el ForegroundService.
+     * - standby=true  -> SPECIAL_USE (API 34+) / DATA_SYNC (API < 34) porque cámara y mic están OFF.
+     * - standby=false -> CAMERA | MICROPHONE (streaming activo).
+     */
     private fun startAsForeground(standby: Boolean = false) {
         val types = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             when {
@@ -622,7 +296,7 @@ class StreamingForegroundService : LifecycleService() {
     }
 
     override fun onDestroy() {
-        cleanupStreaming()
+        sessionCoordinator.close()
         stopForegroundNow()
         serviceScope.cancel()
         unregisterNetworkCallback()

@@ -6,7 +6,6 @@ import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.example.streamapp.MainApplication
-import com.example.streamapp.network.SignalRClient
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import kotlinx.coroutines.CoroutineScope
@@ -61,9 +60,11 @@ class ViuwFirebaseMessagingService : FirebaseMessagingService() {
                 }
                 try {
                     ContextCompat.startForegroundService(this, intent)
+                    // Si el FGS arranca, liberar cualquier coordinador standby previo.
+                    StreamSessionCoordinatorProvider.release()
                 } catch (e: Exception) {
-                    Log.w(TAG, "ForegroundService no permitido en background (${e.message}); conectando SignalR directo para $sessionCode")
-                    handleStreamInWorker(sessionCode)
+                    Log.w(TAG, "ForegroundService no permitido en background (${e.message}); delegando en coordinador compartido para $sessionCode")
+                    handleStreamInCoordinator(sessionCode)
                 }
             } else {
                 Log.w(TAG, "FCM START_STREAM sin sessionCode/sessionId: $data")
@@ -72,32 +73,17 @@ class ViuwFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     /**
-     * Si el sistema impide iniciar el ForegroundService (Android 12+ background),
-     * conecta SignalR y deja la sesión WebRTC lista (cámara/mic apagados).
+     * Fallback cuando el sistema impide iniciar el ForegroundService (Android 12+ background).
+     * Usa el StreamSessionCoordinator compartido para mantener SignalR + WebRTC listos.
      */
-    private fun handleStreamInWorker(sessionId: String) {
+    private fun handleStreamInCoordinator(sessionCode: String) {
         serviceScope.launch {
             try {
-                val signalR = SignalRClient()
-                signalR.connect()
-                // El emisor ya tiene la PeerConnection negociada con tracks deshabilitados.
-                // Aquí solo se registra la presencia y se mantiene la conexión viva.
-                val hardwareId = Settings.Secure.getString(
-                    contentResolver,
-                    Settings.Secure.ANDROID_ID
-                )
-                if (!hardwareId.isNullOrBlank()) {
-                    signalR.registerDevicePresence(hardwareId)
-                }
-                // Escucha OnStartStreamRequested (puede llegar por SignalR si el FCM despertó al dispositivo).
-                signalR.onStartStream { sid ->
-                    if (sid == sessionId) {
-                        Log.i(TAG, "OnStartStreamRequested por SignalR para $sid")
-                    }
-                }
-                Log.i(TAG, "SignalR conectado en modo standby para sesión $sessionId")
+                val coordinator = StreamSessionCoordinatorProvider.get(applicationContext)
+                coordinator.startSession(sessionCode)
+                Log.i(TAG, "Coordinador activado para sesión $sessionCode (sin FGS)")
             } catch (t: Throwable) {
-                Log.e(TAG, "No se pudo conectar SignalR directo desde FCM: ${t.message}")
+                Log.e(TAG, "No se pudo activar coordinador desde FCM: ${t.message}")
             }
         }
     }

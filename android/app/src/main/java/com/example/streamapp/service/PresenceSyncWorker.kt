@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Worker que, en cuanto hay Internet, asegura la presencia del dispositivo
- * supervisado (SENDER) en el backend y deja el servicio en standby.
+ * supervisado (SENDER) en el backend y deja el coordinador en standby.
  *
  * Se encola desde el arranque del teléfono, la actualización del APK o FCM.
  */
@@ -99,68 +99,27 @@ class PresenceSyncWorker(
         }
     }
 
-    /** Intenta el ForegroundService en standby; si Android lo prohíbe, SignalR directo. */
+    /** Inicia el coordinador en modo standby (SignalR + presencia, sin WebRTC). */
     private fun startStandby(context: Context) {
         val intent = Intent(context, StreamingForegroundService::class.java).apply {
             action = StreamingForegroundService.ACTION_STANDBY
         }
         try {
             ContextCompat.startForegroundService(context, intent)
+            // Si el FGS arranca, liberar cualquier StandbySignalR previo para evitar duplicados.
+            StreamSessionCoordinatorProvider.release()
         } catch (t: Throwable) {
-            Log.w(TAG, "FGS no permitido en background (${t.message}); conectando SignalR directo")
-            StandbySignalR.ensureConnected(context)
+            Log.w(TAG, "FGS no permitido en background (${t.message}); activando coordinador en standby directo")
+            // Fallback: usar el coordinador compartido sin ForegroundService.
+            val coordinator = StreamSessionCoordinatorProvider.get(context)
+            // El coordinador ya mantiene SignalR y presencia internamente al crearse.
+            // No hace falta llamar a startSession (sin sessionCode).
+            Log.i(TAG, "Coordinador activado en modo standby (sin FGS)")
         }
     }
 
     companion object {
         private const val TAG = "PresenceSyncWorker"
-    }
-}
-
-/**
- * Mantiene una conexión SignalR "de standby" cuando Android no permite levantar
- * el ForegroundService desde background (Android 12+).
- */
-object StandbySignalR {
-
-    private const val TAG = "StandbySignalR"
-
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val lock = Any()
-
-    @Volatile
-    private var client: SignalRClient? = null
-
-    @Volatile
-    private var connecting = false
-
-    fun ensureConnected(context: Context) {
-        val appContext = context.applicationContext
-        synchronized(lock) {
-            if (connecting) return
-            connecting = true
-        }
-
-        scope.launch {
-            try {
-                val signalR = client ?: SignalRClient().also { client = it }
-                if (!signalR.isConnected) {
-                    signalR.connect()
-                }
-                val hardwareId = Settings.Secure.getString(
-                    appContext.contentResolver,
-                    Settings.Secure.ANDROID_ID
-                )
-                if (!hardwareId.isNullOrBlank()) {
-                    signalR.registerDevicePresence(hardwareId)
-                    Log.i(TAG, "Presencia registrada directamente para $hardwareId")
-                }
-            } catch (t: Throwable) {
-                Log.w(TAG, "No se pudo conectar SignalR directo: ${t.message}")
-            } finally {
-                synchronized(lock) { connecting = false }
-            }
-        }
     }
 }
 
